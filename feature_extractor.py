@@ -8,8 +8,8 @@ Original file is located at
 """
 
 # --- Core ---
-import numpy as np
 from __future__ import annotations
+import numpy as np
 
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional, Tuple
