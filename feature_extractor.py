@@ -243,28 +243,3 @@ class FeatureExtractor:
             if self.strict_shape:
                 raise ValueError(msg)
             # non-strict: allow it (useful for 512x512 tests, etc.)
-
-# dem_roi_m: (H,W) float32/float64, in meters (e.g., canonical 1024×1024 or smaller test ROIs)
-# --- DataHandler stage ---
-roi_km = dh.read_roi(tile, 7072, 8096, 7072, 8096)  # (H,W)
-terrain = standardise_lola(tile, roi=roi_km, representation="height")
-
-# --- Bridge (THIS LINE WAS MISSING) ---
-dem_roi_m = terrain.data_m   # numpy array, meters
-
-# --- FeatureExtractor stage ---
-fx = FeatureExtractor(
-    pixel_size_m=20.0,
-    slope_units="degrees",
-    expected_shape=None
-)
-
-features = fx.extract(
-    dem_roi_m,
-    roughness_method="rms",
-    roughness_window=5
-)
-
-slope_deg = features["slope_deg"]
-rough_rms = features["roughness_rms"]
-
