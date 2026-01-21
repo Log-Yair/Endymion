@@ -9,20 +9,11 @@ Original file is located at
 
 # --- Core ---
 import numpy as np
-
-# --- Endymion: Data layer ---
-from ../content/drive/MyDrive/Endymion/src/data_handler.ipynb.data.data_handler import DataHandler
-from ../content/drive/MyDrive/Endymion/src/data_handler.ipynb.data.standardisation import standardise_lola
-# --- Endymion: Feature layer ---
-from ../content/drive/MyDrive/Endymion/src/data_handler.ipynb.features.feature_extractor import FeatureExtractor
-
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional, Tuple
 import numpy as np
-
-
 
 RoughnessMethod = Literal["rms", "tri"]
 
@@ -261,9 +252,6 @@ class FeatureExtractor:
 
 # dem_roi_m: (H,W) float32/float64, in meters (e.g., canonical 1024×1024 or smaller test ROIs)
 # --- DataHandler stage ---
-dh = DataHandler()
-tile = dh.load_tile("ldem_85s_20m_float")
-
 roi_km = dh.read_roi(tile, 7072, 8096, 7072, 8096)  # (H,W)
 terrain = standardise_lola(tile, roi=roi_km, representation="height")
 
