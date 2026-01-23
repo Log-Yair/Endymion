@@ -301,10 +301,10 @@ class DataHandler:
 
         # If you ever discover a tile is in km, handle it ONCE here.
         # For LOLA elevation tiles you normally want metres.
-        if meta.units.lower() in ("km", "kilometres", "kilometers"):
+        if meta.units.lower() in ("km", "kilometer", "kilometre", "kilometers", "kilometres"):
             patch = patch * 1000.0
             meta.units = "m"
-
+            
         return patch
 
     # ----------------------------
