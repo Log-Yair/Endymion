@@ -223,10 +223,11 @@ class DataHandler:
         lbl = self.parse_lbl(lbl_path)
 
         # Required
-        lines = int(lbl.get("LINES"))
-        line_samples = int(lbl.get("LINE_SAMPLES"))
-        sample_type = lbl.get("SAMPLE_TYPE")
-        sample_bits = int(lbl.get("SAMPLE_BITS"))
+        unit = (lbl.get("UNIT") or "m").strip().lower()         # "kilometer"
+        offset = lbl.get("OFFSET")                              # "1737.4" (string)
+        scale_str = lbl.get("SCALING_FACTOR")                   # "1"
+        scale = float(scale_str) if scale_str is not None else None
+
 
         # Optional
         missing_constant = lbl.get("MISSING_CONSTANT")
@@ -254,10 +255,17 @@ class DataHandler:
             shape=(lines, line_samples),
             dtype=str(dtype),
             nodata=nodata,
-            units="m",                 # we standardise to metres
+            units="km" if unit.startswith("kilo") else unit,     # standardise label variants
             scaling_factor=scale,
-            extra={"sample_type": sample_type, "sample_bits": sample_bits},
+            extra={
+                "sample_type": sample_type,
+                "sample_bits": sample_bits,
+                "offset_radius_km": float(offset) if offset is not None else None,
+                "derived_minimum": float(lbl["DERIVED_MINIMUM"]) if "DERIVED_MINIMUM" in lbl else None,
+                "derived_maximum": float(lbl["DERIVED_MAXIMUM"]) if "DERIVED_MAXIMUM" in lbl else None,
+            },
         )
+
 
         return RasterTile(tile_id=tile_id, data=arr, meta=meta)
 
