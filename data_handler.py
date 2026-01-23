@@ -1,3 +1,5 @@
+
+from __future__ import annotations
 """
 data_handler.ipynb
  
@@ -25,8 +27,6 @@ Responsibility:
 Keep this module "dumb and reliable":
   - No slope/roughness here (belongs in FeatureExtractor).
 """
-
-from __future__ import annotations
 
 import re
 import shutil
