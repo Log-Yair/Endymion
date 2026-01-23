@@ -71,6 +71,12 @@ class FeatureExtractor:
             rough_key: rough.astype(np.float32),
         }
 
+    def extract_from_patch(self, patch: RasterPatch, ...):
+    if patch.meta.units != "m":
+        raise ValueError(f"Expected metres, got {patch.meta.units} for {patch.meta.tile_id}")
+    return self.extract(patch.data, ...)
+
+
     # -------------------------
     # SLOPE
     # -------------------------
@@ -117,7 +123,7 @@ class FeatureExtractor:
         Uses a fast integral-image approach (O(1) per pixel) for mean and mean-square.
 
         Notes:
-        - If NaNs exist, we fall back to a slower but NaN-aware approach.
+        - If NaNs exist, fall back to a slower but NaN-aware approach.
         """
         if window < 3 or window % 2 == 0:
             raise ValueError("roughness_window must be an odd integer >= 3 (e.g., 3,5,7).")
@@ -125,59 +131,34 @@ class FeatureExtractor:
         if np.isnan(dem).any():
             return self._roughness_rms_nanaware(dem, window=window, pad_mode=pad_mode)
 
-        r = window // 2
-        z = np.pad(dem, r, mode=pad_mode).astype(np.float64, copy=False)
+		r = window // 2
+		z = np.pad(dem, r, mode=pad_mode).astype(np.float64, copy=False)
+		
+		# integral images with leading 0 row/col
+		S  = np.pad(z.cumsum(0).cumsum(1),  ((1,0),(1,0)), mode="constant")
+		S2 = np.pad((z*z).cumsum(0).cumsum(1), ((1,0),(1,0)), mode="constant")
+		
+		H, W = dem.shape
+		
+		# top-left corners of each window on the padded grid
+		y0 = np.arange(0, H)
+		x0 = np.arange(0, W)
+		Y0, X0 = np.meshgrid(y0, x0, indexing="ij")
+		
+		# bottom-right corners
+		Y1 = Y0 + window
+		X1 = X0 + window
+		
+		# box sums (notice: indices already work because S has +1 padding)
+		sum_z  = S[Y1, X1]  - S[Y0, X1]  - S[Y1, X0]  + S[Y0, X0]
+		sum_z2 = S2[Y1, X1] - S2[Y0, X1] - S2[Y1, X0] + S2[Y0, X0]
+		
+		n = float(window * window)
+		mean = sum_z / n
+		var = (sum_z2 / n) - mean * mean
+		var = np.maximum(var, 0.0)
+		return np.sqrt(var).astype(np.float32)
 
-        # integral images for z and z^2
-        S = z.cumsum(axis=0).cumsum(axis=1)
-        S2 = (z * z).cumsum(axis=0).cumsum(axis=1)
-
-        # sum over window via integral image lookups
-        H, W = dem.shape
-        y0 = np.arange(0, H)
-        x0 = np.arange(0, W)
-        Y0, X0 = np.meshgrid(y0, x0, indexing="ij")
-
-        y1 = Y0 + window - 1
-        x1 = X0 + window - 1
-        y0i = Y0
-        x0i = X0
-
-        def box_sum(ii: np.ndarray) -> np.ndarray:
-            A = ii[y1, x1]
-            B = ii[y0i - 1, x1]
-            C = ii[y1, x0i - 1]
-            D = ii[y0i - 1, x0i - 1]
-            return A - B - C + D
-
-        # Shift indices because our Y0/X0 are for the padded grid start
-        Y0p = Y0
-        X0p = X0
-        y1 = Y0p + window - 1
-        x1 = X0p + window - 1
-        y0i = Y0p
-        x0i = X0p
-
-        # Need guard rows/cols: easiest is pad integral with a leading zero row/col
-        S0 = np.pad(S, ((1, 0), (1, 0)), mode="constant", constant_values=0.0)
-        S20 = np.pad(S2, ((1, 0), (1, 0)), mode="constant", constant_values=0.0)
-
-        # Now indices in S0 are +1
-        y0s = y0i + 1
-        x0s = x0i + 1
-        y1s = y1 + 1
-        x1s = x1 + 1
-
-        sum_z = S0[y1s, x1s] - S0[y0s - 1, x1s] - S0[y1s, x0s - 1] + S0[y0s - 1, x0s - 1]
-        sum_z2 = S20[y1s, x1s] - S20[y0s - 1, x1s] - S20[y1s, x0s - 1] + S20[y0s - 1, x0s - 1]
-
-        n = float(window * window)
-        mean = sum_z / n
-        var = (sum_z2 / n) - (mean * mean)
-        var = np.maximum(var, 0.0)  # numerical safety
-        std = np.sqrt(var)
-
-        return std.astype(np.float32)
 
     def _roughness_rms_nanaware(
         self,
