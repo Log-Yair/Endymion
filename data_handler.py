@@ -1,40 +1,49 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 import numpy as np
 
 
-# --------------------------------------------------------
+# ============================================================
 # 1) Types / Specs
-# --------------------------------------------------------
+# ============================================================
 
 ROI = Tuple[int, int, int, int]  # (r0, r1, c0, c1) pixel window
 
 
 @dataclass(frozen=True)
 class LOLATileSpec:
-    tile_id: str                  # e.g. "ldem_85n_20m"
-    filename: str                 # e.g. "ldem_85n_20m_float.img"
-    label_filename: Optional[str] = None  # e.g. ".lbl" if needed
+    tile_id: str
+    img_filename: str                 # e.g. "ldem_85n_20m_float.img"
+    lbl_filename: Optional[str] = None  # e.g. "ldem_85n_20m_float.lbl"
 
 
 @dataclass
 class RasterMeta:
     """Minimal metadata the rest of the pipeline can rely on."""
     tile_id: str
-    shape: Tuple[int, int]
-    dtype: str
+    shape: Tuple[int, int]            # (lines, line_samples)
+    dtype: str                        # numpy dtype str (e.g., '<f4')
     nodata: Optional[float] = None
-    units: str = "m"              # keep consistent (recommend metres)
-    extra: Dict[str, Any] = None
+    units: str = "m"                  # standard output should be metres
+    scaling_factor: Optional[float] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RasterTile:
+    """Memmap-backed full tile (do not materialise unless needed)."""
+    tile_id: str
+    data: np.ndarray                  # typically np.memmap
+    meta: RasterMeta
 
 
 @dataclass
 class RasterPatch:
-    """What DataHandler returns."""
-    data: np.ndarray              # 2D float array (metres, NaNs for nodata)
+    """What DataHandler returns to the rest of Endymion."""
+    data: np.ndarray                  # 2D float array (metres, NaNs for nodata)
     meta: RasterMeta
     roi: ROI
 
@@ -61,11 +70,13 @@ class ValidationError(DataHandlerError):
 
 class DataHandler:
     """
-    Endymion DataHandler (loyal to the architecture):
-      - fetch/open raw LOLA tiles (local cache + optional remote)
+    Endymion DataHandler responsibilities:
+      - ensure .img/.lbl present locally (optional remote download)
+      - parse label (minimal required keys)
+      - memmap open raster
       - extract ROI patches
-      - standardise output array (float32/float64, metres, NaNs for nodata)
-      - run sanity checks
+      - standardise output (float32, metres, NaNs for nodata)
+      - sanity checks
 
     It MUST NOT compute derived features (slope/roughness/etc).
     """
@@ -87,101 +98,201 @@ class DataHandler:
     # Public API
     # ----------------------------
 
-    def get_patch(self, tile_id: str, roi: ROI) -> RasterPatch:
+    def get_patch(self, tile_id: str, roi: ROI, verbose: bool = False) -> RasterPatch:
         """
         Main entry-point used by System_Controller.
+        ROI-first: only materialises the ROI region (fast + memory safe).
         """
-        tile = self._get_tile(tile_id)
-        img_path = self._ensure_local(tile)
+        tile = self.load_tile(tile_id, force_download=self.force_download, verbose=verbose)
 
-        # 1) Read raw raster (full or memory-mapped)
-        raw, meta = self._read_lola_float_img(img_path, tile)
+        patch = self._read_roi(tile, roi)          # materialise ROI only
+        patch = self._standardise_patch(patch, tile.meta)
+        self._validate_patch(patch, roi, tile.meta)
 
-        # 2) Extract ROI
-        patch = self._extract_roi(raw, roi)
-
-        # 3) Standardise dtype + nodata => NaN
-        patch = self._standardise(patch, meta)
-
-        # 4) Validate / sanity check
-        self._validate_patch(patch, roi, meta)
-
-        return RasterPatch(
-            data=patch,
-            meta=meta,
-            roi=roi,
-        )
+        return RasterPatch(data=patch, meta=tile.meta, roi=roi)
 
     # ----------------------------
-    # Tile resolution / I/O
+    # Tile resolution / local cache
     # ----------------------------
 
-    def _get_tile(self, tile_id: str) -> LOLATileSpec:
-        if tile_id not in self.tiles:
-            raise TileNotFoundError(f"Unknown tile_id '{tile_id}'. Available: {list(self.tiles.keys())}")
-        return self.tiles[tile_id]
-
-    def _ensure_local(self, tile: LOLATileSpec) -> Path:
-        """
-        Ensure the tile .img exists locally. If not, download it.
-        (Download impl can be added without changing the rest of the code.)
-        """
-        local = self.cache_dir / tile.filename
-        if local.exists() and not self.force_download:
-            return local
-
-        # TODO: implement download if you're pulling from PDS
-        # self._download_file(remote_url=f"{self.base_url}/{tile.filename}", local_path=local)
-
-        if not local.exists():
+    def _get_spec(self, tile_id: str) -> LOLATileSpec:
+        try:
+            return self.tiles[tile_id]
+        except KeyError:
             raise TileNotFoundError(
-                f"Tile file not found locally: {local}\n"
-                f"Download not implemented / not run. Either place the file there or implement _download_file()."
+                f"Unknown tile_id '{tile_id}'. Available: {list(self.tiles.keys())}"
             )
-        return local
+
+    def ensure_downloaded(self, tile_id: str, force: bool = False) -> tuple[Path, Optional[Path]]:
+        """
+        Ensures IMG (and LBL if provided) exist locally.
+        Download hook is intentionally a stub for now.
+        """
+        spec = self._get_spec(tile_id)
+        img_path = self.cache_dir / spec.img_filename
+        lbl_path = (self.cache_dir / spec.lbl_filename) if spec.lbl_filename else None
+
+        if (img_path.exists() and (lbl_path is None or lbl_path.exists())) and not force:
+            return img_path, lbl_path
+
+        # TODO: Implement download when you're ready:
+        # if not img_path.exists() or force:
+        #     self._download_file(f"{self.base_url}/{spec.img_filename}", img_path)
+        # if lbl_path and (not lbl_path.exists() or force):
+        #     self._download_file(f"{self.base_url}/{spec.lbl_filename}", lbl_path)
+
+        # Hard fail if still missing
+        missing = []
+        if not img_path.exists():
+            missing.append(str(img_path))
+        if lbl_path is not None and not lbl_path.exists():
+            missing.append(str(lbl_path))
+
+        if missing:
+            raise TileNotFoundError(
+                "Missing required tile files locally:\n"
+                + "\n".join(f" - {m}" for m in missing)
+                + "\nDownload not implemented; place files there or implement _download_file()."
+            )
+
+        return img_path, lbl_path
+
+    # ----------------------------
+    # Label parsing (minimal)
+    # ----------------------------
+
+    def parse_lbl(self, lbl_path: Path) -> dict[str, Any]:
+        """
+        Minimal PDS3-ish parser for the handful of keys we need.
+        Assumes 'KEY = VALUE' per line. Good enough for LOLA LBLs in this project scope.
+        """
+        text = lbl_path.read_text(errors="ignore").splitlines()
+        out: dict[str, Any] = {}
+
+        def _clean(v: str) -> str:
+            return v.strip().strip('"').strip("'")
+
+        for line in text:
+            if "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip().upper()
+            v = v.strip()
+            # drop inline comments if present
+            if "/*" in v:
+                v = v.split("/*", 1)[0].strip()
+            out[k] = _clean(v)
+
+        return out
 
     # ----------------------------
     # Reading LOLA float_img
     # ----------------------------
 
-    def _read_lola_float_img(self, img_path: Path, tile: LOLATileSpec) -> tuple[np.ndarray, RasterMeta]:
+    def _numpy_dtype_from_sample_type(self, sample_type: str, sample_bits: int) -> np.dtype:
+        st = (sample_type or "").upper()
+
+        if ("REAL" not in st) and ("FLOAT" not in st):
+            raise ValueError(f"Unsupported SAMPLE_TYPE (expected REAL/FLOAT): {sample_type}")
+
+        if sample_bits == 32:
+            if ("PC" in st) or ("LSB" in st):
+                return np.dtype("<f4")
+            if "MSB" in st:
+                return np.dtype(">f4")
+            return np.dtype("f4")
+
+        if sample_bits == 64:
+            if ("PC" in st) or ("LSB" in st):
+                return np.dtype("<f8")
+            if "MSB" in st:
+                return np.dtype(">f8")
+            return np.dtype("f8")
+
+        raise ValueError(f"Unsupported SAMPLE_TYPE/SAMPLE_BITS: {sample_type}/{sample_bits}")
+
+    def load_tile(self, tile_id: str, force_download: bool = False, verbose: bool = False) -> RasterTile:
         """
-        Read LOLA .img (float grid).
-        NOTE: This is where your current notebook code should live.
-        Keep it isolated here so the rest stays clean.
+        Ensures files are present, parses label, and returns a memmap-backed RasterTile.
         """
-        # TODO: replace with your real reader:
-        # - determine dtype (float32)
-        # - determine shape (from label or known convention)
-        # - nodata sentinel (if present)
-        #
-        # For now: raise clearly
-        raise NotImplementedError("Implement LOLA float_img reader here (memory-map recommended).")
+        img_path, lbl_path = self.ensure_downloaded(tile_id, force=force_download)
+
+        if lbl_path is None:
+            raise ValueError(f"No LBL provided for '{tile_id}'. Add lbl_filename in LOLATileSpec.")
+
+        lbl = self.parse_lbl(lbl_path)
+
+        # Required
+        lines = int(lbl.get("LINES"))
+        line_samples = int(lbl.get("LINE_SAMPLES"))
+        sample_type = lbl.get("SAMPLE_TYPE")
+        sample_bits = int(lbl.get("SAMPLE_BITS"))
+
+        # Optional
+        missing_constant = lbl.get("MISSING_CONSTANT")
+        scaling_factor = lbl.get("SCALING_FACTOR")
+
+        nodata = float(missing_constant) if missing_constant is not None else None
+        scale = float(scaling_factor) if scaling_factor is not None else None
+
+        dtype = self._numpy_dtype_from_sample_type(sample_type, sample_bits)
+
+        expected_bytes = lines * line_samples * (sample_bits // 8)
+        actual_bytes = img_path.stat().st_size
+        if actual_bytes < expected_bytes:
+            raise IOError(
+                f"IMG too small: {actual_bytes} < {expected_bytes} bytes for tile '{tile_id}'."
+            )
+
+        if verbose:
+            print(f"[{tile_id}] shape=({lines},{line_samples}) dtype={dtype} nodata={nodata} scale={scale}")
+
+        arr = np.memmap(img_path, dtype=dtype, mode="r", shape=(lines, line_samples))
+
+        meta = RasterMeta(
+            tile_id=tile_id,
+            shape=(lines, line_samples),
+            dtype=str(dtype),
+            nodata=nodata,
+            units="m",                 # we standardise to metres
+            scaling_factor=scale,
+            extra={"sample_type": sample_type, "sample_bits": sample_bits},
+        )
+
+        return RasterTile(tile_id=tile_id, data=arr, meta=meta)
 
     # ----------------------------
-    # ROI + Standardisation
+    # ROI extraction (ROI-first)
     # ----------------------------
 
-    def _extract_roi(self, raster: np.ndarray, roi: ROI) -> np.ndarray:
+    def _read_roi(self, tile: RasterTile, roi: ROI) -> np.ndarray:
         r0, r1, c0, c1 = roi
-        if not (0 <= r0 < r1 <= raster.shape[0] and 0 <= c0 < c1 <= raster.shape[1]):
-            raise ValidationError(f"ROI {roi} out of bounds for raster shape {raster.shape}")
-        return raster[r0:r1, c0:c1].copy()  # copy keeps patch independent
+        H, W = tile.meta.shape
+        if not (0 <= r0 < r1 <= H and 0 <= c0 < c1 <= W):
+            raise ValidationError(f"ROI {roi} out of bounds for raster shape {(H, W)}")
 
-    def _standardise(self, patch: np.ndarray, meta: RasterMeta) -> np.ndarray:
+        # Materialise ROI only (keeps memmap benefit)
+        roi_arr = np.asarray(tile.data[r0:r1, c0:c1], dtype=np.float32)
+        return roi_arr
+
+    def _standardise_patch(self, patch: np.ndarray, meta: RasterMeta) -> np.ndarray:
         """
-        Output convention for Endymion:
-          - float32 or float64
+        Endymion output convention:
+          - float32
           - metres
           - nodata -> np.nan
+          - apply scaling_factor if present
         """
-        if not np.issubdtype(patch.dtype, np.floating):
-            patch = patch.astype(np.float32)
+        patch = np.asarray(patch, dtype=np.float32)
 
         if meta.nodata is not None:
-            patch = np.where(patch == meta.nodata, np.nan, patch)
+            patch[patch == meta.nodata] = np.nan
 
-        # If units are km in raw, convert to metres here ONCE and set meta.units="m"
+        if meta.scaling_factor is not None:
+            patch = patch * float(meta.scaling_factor)
+
+        # If you ever discover a tile is in km, handle it ONCE here.
+        # For LOLA elevation tiles you normally want metres.
         if meta.units.lower() in ("km", "kilometres", "kilometers"):
             patch = patch * 1000.0
             meta.units = "m"
@@ -194,33 +305,28 @@ class DataHandler:
 
     def _validate_patch(self, patch: np.ndarray, roi: ROI, meta: RasterMeta) -> None:
         r0, r1, c0, c1 = roi
-        expected_shape = (r1 - r0, c1 - c0)
-
-        if patch.shape != expected_shape:
-            raise ValidationError(f"Patch shape {patch.shape} != expected {expected_shape} for roi={roi}")
+        expected = (r1 - r0, c1 - c0)
+        if patch.shape != expected:
+            raise ValidationError(f"Patch shape {patch.shape} != expected {expected} for roi={roi}")
 
         nan_ratio = float(np.isnan(patch).mean())
+        meta.extra.update({"nan_ratio": nan_ratio})
+
         if nan_ratio > 0.95:
             raise ValidationError(f"Patch NaN ratio too high: {nan_ratio:.3f}")
 
-        # Optional: log-only stats (don’t raise unless obviously broken)
-        _min = np.nanmin(patch)
-        _max = np.nanmax(patch)
-        if not np.isfinite(_min) or not np.isfinite(_max):
+        finite = patch[np.isfinite(patch)]
+        if finite.size == 0:
             raise ValidationError("Patch has no finite values after standardisation.")
 
-        # You can store quick stats in meta.extra if you want
-        if meta.extra is None:
-            meta.extra = {}
         meta.extra.update({
-            "nan_ratio": nan_ratio,
-            "min_m": float(_min),
-            "max_m": float(_max),
+            "min_m": float(np.min(finite)),
+            "max_m": float(np.max(finite)),
         })
 
 
 # ============================================================
-# 4) Example: your canonical ROI prototype
+# 4) Example ROI ( canonical prototype)
 # ============================================================
 
-CANONICAL_ROI: ROI = (7072, 8096, 7072, 8096)  # (1024, 1024)
+CANONICAL_ROI: ROI = (7072, 8096, 7072, 8096)
