@@ -111,7 +111,11 @@ class DataHandler:
         base_url: str,
         tiles: list[LOLATileSpec],
         cache_dir: str | Path = "./data_cache/lola",
+        persistent_dir: str | Path | None = None, # NEW: Drive cache
+        runtime_dir: str | Path | None = None, # NEW: local cache
+        allow_download: bool = True, # NEW
         force_download: bool = False,
+        timeout_s: int = 60, # NEW
     ):
         self.base_url = base_url.rstrip("/")
         self.tiles: Dict[str, LOLATileSpec] = {t.tile_id: t for t in tiles}
