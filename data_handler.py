@@ -249,42 +249,6 @@ class DataHandler:
             )
         return spec
 
-    def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
-        rt_img = self.runtime_dir / spec.img_filename
-        rt_lbl = self.runtime_dir / spec.lbl_filename
-    
-        ps_img = self.persistent_dir / spec.img_filename
-        ps_lbl = self.persistent_dir / spec.lbl_filename
-    
-        # 1) runtime hit
-        if rt_img.exists() and rt_lbl.exists() and not self.force_download:
-            return rt_img, rt_lbl
-    
-        # 2) persistent hit -> copy to runtime
-        if ps_img.exists() and ps_lbl.exists() and not self.force_download:
-            self._copy_if_needed(ps_img, rt_img)
-            self._copy_if_needed(ps_lbl, rt_lbl)
-            return rt_img, rt_lbl
-    
-        # 3) download if allowed
-        if not self.allow_download:
-            raise TileNotFoundError(
-                f"Tile not found in runtime or persistent cache:\n"
-                f"Runtime: {rt_img} / {rt_lbl}\n"
-                f"Persistent: {ps_img} / {ps_lbl}"
-            )
-    
-        self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
-        self._download_file(f"{self.base_url}/{spec.lbl_filename}", ps_lbl)
-        self._copy_if_needed(ps_img, rt_img)
-        self._copy_if_needed(ps_lbl, rt_lbl)
-    
-        if not rt_img.exists():
-            raise TileNotFoundError(f"Missing IMG file after download/copy: {rt_img}")
-        if not rt_lbl.exists():
-            raise TileNotFoundError(f"Missing LBL file after download/copy: {rt_lbl}")
-    
-        return rt_img, rt_lbl
 
     # ----------------------------
     # Label parsing (LBL)
