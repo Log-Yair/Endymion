@@ -94,17 +94,17 @@ class ValidationError(DataHandlerError):
 # ============================================================
 # DataHandler
 # ============================================================
-
+"""
+Endymion DataHandler:
+- resolves tiles (local cache; download hook optional)
+- parses .LBL
+- loads .IMG as memmap
+- extracts ROI
+- standardises to metres + float32 + NaNs
+- sanity checks
+"""
 class DataHandler:
-  """
-    Endymion DataHandler:
-      - resolves tiles (local cache; download hook optional)
-      - parses .LBL
-      - loads .IMG as memmap
-      - extracts ROI
-      - standardises to metres + float32 + NaNs
-      - sanity checks
-    """
+    
     def __init__(
         self,
         base_url: str,
