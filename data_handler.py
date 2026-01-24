@@ -105,7 +105,6 @@ class DataHandler:
       - standardises to metres + float32 + NaNs
       - sanity checks
     """
-
     def __init__(
         self,
         base_url: str,
