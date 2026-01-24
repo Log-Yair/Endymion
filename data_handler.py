@@ -94,34 +94,114 @@ class ValidationError(DataHandlerError):
 # ============================================================
 # DataHandler
 # ============================================================
-
+"""
+Endymion DataHandler:
+- resolves tiles (local cache; download hook optional)
+- parses .LBL
+- loads .IMG as memmap
+- extracts ROI
+- standardises to metres + float32 + NaNs
+- sanity checks
+"""
 class DataHandler:
-    """
-    Endymion DataHandler:
-      - resolves tiles (local cache; download hook optional)
-      - parses .LBL
-      - loads .IMG as memmap
-      - extracts ROI
-      - standardises to metres + float32 + NaNs
-      - sanity checks
-    """
-
+    
     def __init__(
         self,
         base_url: str,
         tiles: list[LOLATileSpec],
-        cache_dir: str | Path = "./data_cache/lola",
+        cache_dir: str | Path = "./data_cache/lola",   # keep for backwards compat
+        persistent_dir: str | Path | None = None,      # NEW: Drive cache
+        runtime_dir: str | Path | None = None,         # NEW: local cache
+        allow_download: bool = True,                   # NEW
         force_download: bool = False,
+        timeout_s: int = 60,                           # NEW
     ):
         self.base_url = base_url.rstrip("/")
         self.tiles: Dict[str, LOLATileSpec] = {t.tile_id: t for t in tiles}
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.force_download = force_download
 
-    # ----------------------------
+        # Backwards-compatible default: behave like before
+        self.persistent_dir = Path(persistent_dir) if persistent_dir else Path(cache_dir)
+        self.runtime_dir = Path(runtime_dir) if runtime_dir else self.persistent_dir
+
+        self.persistent_dir.mkdir(parents=True, exist_ok=True)
+        self.runtime_dir.mkdir(parents=True, exist_ok=True)
+
+        self.allow_download = allow_download
+        self.force_download = force_download
+        self.timeout_s = timeout_s
+
+    def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
+        """
+        Ensures (IMG, LBL) exist in runtime_dir (fast path).
+        Uses persistent_dir as the durable store.
+        """
+        rt_img = self.runtime_dir / spec.img_filename
+        rt_lbl = self.runtime_dir / spec.lbl_filename
+
+        ps_img = self.persistent_dir / spec.img_filename
+        ps_lbl = self.persistent_dir / spec.lbl_filename
+
+        # 1) runtime cache hit
+        if rt_img.exists() and rt_lbl.exists() and not self.force_download:
+            return rt_img, rt_lbl
+
+        # 2) persistent cache hit -> copy to runtime
+        if ps_img.exists() and ps_lbl.exists() and not self.force_download:
+            self._copy_if_needed(ps_img, rt_img)
+            self._copy_if_needed(ps_lbl, rt_lbl)
+            return rt_img, rt_lbl
+
+        # 3) need to download
+        if not self.allow_download:
+            # Keep your existing error style, but explain both locations
+            raise TileNotFoundError(
+                f"Tile not found.\n"
+                f"Runtime: {rt_img.name} / {rt_lbl.name} under {self.runtime_dir}\n"
+                f"Persistent: {ps_img.name} / {ps_lbl.name} under {self.persistent_dir}\n"
+                f"Downloads disabled (allow_download=False)."
+            )
+
+        # Download into persistent, then copy to runtime
+        self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
+        self._download_file(f"{self.base_url}/{spec.lbl_filename}", ps_lbl)
+
+        self._copy_if_needed(ps_img, rt_img)
+        self._copy_if_needed(ps_lbl, rt_lbl)
+
+        if not rt_img.exists():
+            raise TileNotFoundError(f"Missing IMG file after download/copy: {rt_img}")
+        if not rt_lbl.exists():
+            raise TileNotFoundError(f"Missing LBL file after download/copy: {rt_lbl}")
+
+        return rt_img, rt_lbl
+
+    def _copy_if_needed(self, src: Path, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        # copy if missing or size mismatch
+        if (not dst.exists()) or (dst.stat().st_size != src.stat().st_size):
+            shutil.copy2(src, dst)
+
+    def _download_file(self, url: str, out_path: Path) -> None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # If already present and not forcing, skip
+        if out_path.exists() and not self.force_download:
+            return
+
+        tmp = out_path.with_suffix(out_path.suffix + ".part")
+
+        with requests.get(url, stream=True, timeout=self.timeout_s) as r:
+            r.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
+        tmp.replace(out_path)
+
+    # ===========================
     # Public API
-    # ----------------------------
+    # ==========================
 
     def get_patch(self, tile_id: str, roi: ROI, verbose: bool = False) -> RasterPatch:
         """
@@ -169,27 +249,6 @@ class DataHandler:
             )
         return spec
 
-    def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
-        """
-        Ensures (IMG, LBL) exist locally.
-        Download hook can be added later without touching the rest.
-        """
-        img_path = self.cache_dir / spec.img_filename
-        lbl_path = self.cache_dir / spec.lbl_filename
-
-        if (img_path.exists() and lbl_path.exists()) and not self.force_download:
-            return img_path, lbl_path
-
-        # TODO: optional download implementation later
-        # self._download_file(f"{self.base_url}/{spec.img_filename}", img_path)
-        # self._download_file(f"{self.base_url}/{spec.lbl_filename}", lbl_path)
-
-        if not img_path.exists():
-            raise TileNotFoundError(f"Missing IMG file: {img_path}")
-        if not lbl_path.exists():
-            raise TileNotFoundError(f"Missing LBL file: {lbl_path}")
-
-        return img_path, lbl_path
 
     # ----------------------------
     # Label parsing (LBL)
