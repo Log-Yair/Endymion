@@ -129,6 +129,7 @@ class DataHandler:
         self.allow_download = allow_download
         self.force_download = force_download
         self.timeout_s = timeout_s
+        self.cache_dir = self.runtime_dir  # for backwards compatibility
 
     def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
         """
