@@ -250,26 +250,41 @@ class DataHandler:
         return spec
 
     def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
-        """
-        Ensures (IMG, LBL) exist locally.
-        Download hook can be added later without touching the rest.
-        """
-        img_path = self.cache_dir / spec.img_filename
-        lbl_path = self.cache_dir / spec.lbl_filename
+    rt_img = self.runtime_dir / spec.img_filename
+    rt_lbl = self.runtime_dir / spec.lbl_filename
 
-        if (img_path.exists() and lbl_path.exists()) and not self.force_download:
-            return img_path, lbl_path
+    ps_img = self.persistent_dir / spec.img_filename
+    ps_lbl = self.persistent_dir / spec.lbl_filename
 
-        # TODO: optional download implementation later
-        # self._download_file(f"{self.base_url}/{spec.img_filename}", img_path)
-        # self._download_file(f"{self.base_url}/{spec.lbl_filename}", lbl_path)
+    # 1) runtime hit
+    if rt_img.exists() and rt_lbl.exists() and not self.force_download:
+        return rt_img, rt_lbl
 
-        if not img_path.exists():
-            raise TileNotFoundError(f"Missing IMG file: {img_path}")
-        if not lbl_path.exists():
-            raise TileNotFoundError(f"Missing LBL file: {lbl_path}")
+    # 2) persistent hit -> copy to runtime
+    if ps_img.exists() and ps_lbl.exists() and not self.force_download:
+        self._copy_if_needed(ps_img, rt_img)
+        self._copy_if_needed(ps_lbl, rt_lbl)
+        return rt_img, rt_lbl
 
-        return img_path, lbl_path
+    # 3) download if allowed
+    if not self.allow_download:
+        raise TileNotFoundError(
+            f"Tile not found in runtime or persistent cache:\n"
+            f"Runtime: {rt_img} / {rt_lbl}\n"
+            f"Persistent: {ps_img} / {ps_lbl}"
+        )
+
+    self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
+    self._download_file(f"{self.base_url}/{spec.lbl_filename}", ps_lbl)
+    self._copy_if_needed(ps_img, rt_img)
+    self._copy_if_needed(ps_lbl, rt_lbl)
+
+    if not rt_img.exists():
+        raise TileNotFoundError(f"Missing IMG file after download/copy: {rt_img}")
+    if not rt_lbl.exists():
+        raise TileNotFoundError(f"Missing LBL file after download/copy: {rt_lbl}")
+
+    return rt_img, rt_lbl
 
     # ----------------------------
     # Label parsing (LBL)
