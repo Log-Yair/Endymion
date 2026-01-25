@@ -142,12 +142,17 @@ class DataHandler:
         ps_img = self.persistent_dir / spec.img_filename
         ps_lbl = self.persistent_dir / spec.lbl_filename
 
+        print(f"[ensure_local] runtime: {rt_img.exists()=}, {rt_lbl.exists()=}")
+        print(f"[ensure_local] persist: {ps_img.exists()=}, {ps_lbl.exists()=}")
+
         # 1) runtime cache hit
         if rt_img.exists() and rt_lbl.exists() and not self.force_download:
+            print("[ensure_local] HIT runtime")
             return rt_img, rt_lbl
 
         # 2) persistent cache hit -> copy to runtime
         if ps_img.exists() and ps_lbl.exists() and not self.force_download:
+            print("[ensure_local] HIT persistent -> copying to runtime")
             self._copy_if_needed(ps_img, rt_img)
             self._copy_if_needed(ps_lbl, rt_lbl)
             return rt_img, rt_lbl
@@ -161,6 +166,7 @@ class DataHandler:
                 f"Persistent: {ps_img.name} / {ps_lbl.name} under {self.persistent_dir}\n"
                 f"Downloads disabled (allow_download=False)."
             )
+        print("[ensure_local] MISS -> downloading")
 
         # Download into persistent, then copy to runtime
         self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
