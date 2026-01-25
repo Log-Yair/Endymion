@@ -190,21 +190,39 @@ class DataHandler:
 
     def _download_file(self, url: str, out_path: Path) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-
+        
         # If already present and not forcing, skip
         if out_path.exists() and not self.force_download:
+            print(f"[download] skip exists: {out_path.name}")
             return
 
         tmp = out_path.with_suffix(out_path.suffix + ".part")
-
-        with requests.get(url, stream=True, timeout=self.timeout_s) as r:
+        print(f"[download] GET {url}")
+        with requests.get(url, stream=True, timeout=(15, 60)) as r:
             r.raise_for_status()
+            total = int(r.headers.get("Content-Length", "0"))
+            done = 0
+            last_mb = -1
+
             with open(tmp, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
+                for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1MB
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    done += len(chunk)
+
+                    # print every ~25MB
+                    mb = done // (25 * 1024 * 1024)
+                    if mb != last_mb:
+                        last_mb = mb
+                        if total:
+                            pct = 100.0 * done / total
+                            print(f"[download] {out_path.name}: {done/1e6:.1f}MB / {total/1e6:.1f}MB ({pct:.1f}%)")
+                        else:
+                            print(f"[download] {out_path.name}: {done/1e6:.1f}MB")
 
         tmp.replace(out_path)
+        print(f"[download] DONE {out_path.name}")
 
     # ===========================
     # Public API
