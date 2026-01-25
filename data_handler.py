@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import shutil
 import requests
+import json
 
 # ============================================================
 # Types
@@ -190,7 +191,7 @@ class DataHandler:
 
     def _download_file(self, url: str, out_path: Path) -> None:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # If already present and not forcing, skip
         if out_path.exists() and not self.force_download:
             print(f"[download] skip exists: {out_path.name}")
@@ -462,5 +463,54 @@ class DataHandler:
         })
 
 
-# Example canonical ROI you gave
+    def _roi_key(self, roi: ROI) -> str:
+        r0, r1, c0, c1 = roi
+        return f"roi_{r0}_{r1}_{c0}_{c1}"
+
+    def derived_dir(self, tile_id: str, roi: ROI) -> Path:
+        return self.persistent_dir / "derived" / tile_id / self._roi_key(roi)
+
+    def save_derived(self, tile_id: str, roi: ROI, dem_m: np.ndarray, features: dict, meta_extra: dict) -> Path:
+        out_dir = self.derived_dir(tile_id, roi)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        np.save(out_dir / "dem_m.npy", dem_m)
+        # save the feature rasters you care about
+        if "slope_deg" in features:
+            np.save(out_dir / "slope_deg.npy", features["slope_deg"])
+        if "roughness_rms" in features:
+            np.save(out_dir / "roughness_rms.npy", features["roughness_rms"])
+
+        meta = {
+            "tile_id": tile_id,
+            "roi": list(roi),
+            "shape": list(dem_m.shape),
+            "units": "m",
+            "products": ["dem_m", "slope_deg", "roughness_rms"],
+            "extra": meta_extra,
+        }
+        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        return out_dir
+
+    def load_derived(self, tile_id: str, roi: ROI) -> Optional[dict]:
+        out_dir = self.derived_dir(tile_id, roi)
+        meta_path = out_dir / "meta.json"
+        if not meta_path.exists():
+            return None
+
+        meta = json.loads(meta_path.read_text())
+        dem_m = np.load(out_dir / "dem_m.npy")
+        out = {"dem_m": dem_m, "meta": meta}
+
+        slope_path = out_dir / "slope_deg.npy"
+        rough_path = out_dir / "roughness_rms.npy"
+        if slope_path.exists():
+            out["slope_deg"] = np.load(slope_path)
+        if rough_path.exists():
+            out["roughness_rms"] = np.load(rough_path)
+
+        return out
+
+
+# Example canonical ROI for testing
 CANONICAL_ROI: ROI = (7072, 8096, 7072, 8096)
