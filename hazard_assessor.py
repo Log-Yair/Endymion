@@ -25,8 +25,8 @@ class HazardAssessor:
     # -------------------------
     # Normalisation ceilings (prototype defaults; override in pipeline)
     # -------------------------
-    slope_deg_max: float = 34.55          # recommend using P95 for your ROI
-    roughness_rms_max: float = 18.56      # recommend using P95 for your ROI
+    slope_deg_max: float = 34.55          
+    roughness_rms_max: float = 18.56      
 
     # -------------------------
     # Weights (should sum to 1.0)
