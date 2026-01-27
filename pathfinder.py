@@ -35,8 +35,8 @@ def build_cost_from_hazard(
     """
     Convert hazard [0..1] into a traversal cost grid, with a conservative safety block.
 
-    Parameters
-    ----------
+    Parameters: 
+    
     hazard : np.ndarray
         Hazard raster in [0,1], float32, same shape as DEM patch.
     alpha : float
@@ -47,8 +47,8 @@ def build_cost_from_hazard(
     block_cost : float
         Cost used to mark blocked cells.
 
-    Returns
-    -------
+    Returns:
+    
     cost : np.ndarray
         Positive traversal cost grid, float32. Blocked cells set to block_cost.
     """
@@ -240,24 +240,3 @@ class Pathfinder:
                 raise ValueError(f"{name} {r,c} out of bounds for cost shape {cost.shape}.")
 
 
-# ============================================================
-# Example usage (your pipeline cell)
-# ============================================================
-"""
-# Choose conservative safety threshold (second mask)
-hazard_block = 0.95   # block very hazardous areas
-alpha = 10.0
-
-# Build cost with hazard ceiling
-cost2 = build_cost_from_hazard(hazard, alpha=alpha, hazard_block=hazard_block, block_cost=1e6)
-
-# Weighted A* (start with 1.2; increase if you need more speed)
-pf = Pathfinder(connectivity=8, block_cost=1e6, heuristic_weight=1.2)
-
-res2 = pf.find_path(cost2, start, goal)
-
-print("Success:", res2["success"])
-print("Total cost:", res2["total_cost"])
-print("Path length:", len(res2["path_rc"]))
-print("Meta:", res2["meta"])
-"""
