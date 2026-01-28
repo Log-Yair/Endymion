@@ -66,9 +66,7 @@ def build_cost_from_hazard(
     return cost
 
 
-# ============================================================
 # 2) PATHFINDER WITH WEIGHTED A*
-# ============================================================
 
 @dataclass
 class Pathfinder:
@@ -86,7 +84,7 @@ class Pathfinder:
     block_cost: float = 1e6
     heuristic_weight: float = 1.2  # set to 1.2 or 1.5 for speed
 
-    def find_path(self, cost: np.ndarray, start: RC, goal: RC) -> Dict[str, object]:
+    def find_path(self, cost: np.ndarray, start: RC, goal: RC, allowed_mask= None) -> Dict[str, object]:
         """Compute least-cost path from start to goal over cost grid."""
         self._validate_inputs(cost, start, goal)
         if self.heuristic_weight < 1.0:
@@ -167,6 +165,9 @@ class Pathfinder:
                     f = tentative + self.heuristic_weight * h  # <-- Weighted A* here
                     heapq.heappush(pq, (float(f), float(tentative), nr, nc))
 
+                if allowed_mask is not None and not allowed_mask[nr, nc]:
+                    continue  # outside allowed corridor
+
         return {
             "success": False,
             "path_rc": [],
@@ -240,3 +241,37 @@ class Pathfinder:
                 raise ValueError(f"{name} {r,c} out of bounds for cost shape {cost.shape}.")
 
 
+# 3) Corridor mask (module-level helper)
+
+def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: int) -> np.ndarray:
+    """
+    Create a corridor (tube) mask around the straight-line segment start->goal.
+
+    True = allowed search region
+    False = ignored by corridor-restricted A*
+    """
+    H, W = shape
+    (r0, c0) = start
+    (r1, c1) = goal
+
+    rr, cc = np.indices((H, W), dtype=np.float32)
+
+    x0, y0 = float(c0), float(r0)  # x=col, y=row
+    x1, y1 = float(c1), float(r1)
+
+    dx = x1 - x0
+    dy = y1 - y0
+    denom = dx * dx + dy * dy
+
+    if denom == 0.0:
+        dist2 = (cc - x0) ** 2 + (rr - y0) ** 2
+        return dist2 <= float(radius_px * radius_px)
+
+    t = ((cc - x0) * dx + (rr - y0) * dy) / denom
+    t = np.clip(t, 0.0, 1.0)
+
+    x_closest = x0 + t * dx
+    y_closest = y0 + t * dy
+
+    dist2 = (cc - x_closest) ** 2 + (rr - y_closest) ** 2
+    return dist2 <= float(radius_px * radius_px)
