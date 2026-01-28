@@ -84,7 +84,7 @@ class Pathfinder:
     """
     connectivity: int = 8
     block_cost: float = 1e6
-    heuristic_weight: float = 1.0  # <-- NEW: set to 1.2 or 1.5 for speed
+    heuristic_weight: float = 1.2  # set to 1.2 or 1.5 for speed
 
     def find_path(self, cost: np.ndarray, start: RC, goal: RC) -> Dict[str, object]:
         """Compute least-cost path from start to goal over cost grid."""
