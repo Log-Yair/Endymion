@@ -21,6 +21,38 @@ import numpy as np
 
 RC = Tuple[int, int]  # (row, col)
 
+def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: int) -> np.ndarray:
+    """
+    Create a corridor (tube) mask around the straight-line segment start->goal.
+
+    True = allowed search region
+    False = ignored by corridor-restricted A*
+    """
+    H, W = shape
+    (r0, c0) = start
+    (r1, c1) = goal
+
+    rr, cc = np.indices((H, W), dtype=np.float32)
+
+    x0, y0 = float(c0), float(r0)  # x=col, y=row
+    x1, y1 = float(c1), float(r1)
+
+    dx = x1 - x0
+    dy = y1 - y0
+    denom = dx * dx + dy * dy
+
+    if denom == 0.0:
+        dist2 = (cc - x0) ** 2 + (rr - y0) ** 2
+        return dist2 <= float(radius_px * radius_px)
+
+    t = ((cc - x0) * dx + (rr - y0) * dy) / denom
+    t = np.clip(t, 0.0, 1.0)
+
+    x_closest = x0 + t * dx
+    y_closest = y0 + t * dy
+
+    dist2 = (cc - x_closest) ** 2 + (rr - y_closest) ** 2
+    return dist2 <= float(radius_px * radius_px)
 
 # ============================================================
 # 1) SECOND SAFETY MASK (hazard ceiling -> blocked cells)
@@ -243,35 +275,3 @@ class Pathfinder:
 
 # 3) Corridor mask (module-level helper)
 
-def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: int) -> np.ndarray:
-    """
-    Create a corridor (tube) mask around the straight-line segment start->goal.
-
-    True = allowed search region
-    False = ignored by corridor-restricted A*
-    """
-    H, W = shape
-    (r0, c0) = start
-    (r1, c1) = goal
-
-    rr, cc = np.indices((H, W), dtype=np.float32)
-
-    x0, y0 = float(c0), float(r0)  # x=col, y=row
-    x1, y1 = float(c1), float(r1)
-
-    dx = x1 - x0
-    dy = y1 - y0
-    denom = dx * dx + dy * dy
-
-    if denom == 0.0:
-        dist2 = (cc - x0) ** 2 + (rr - y0) ** 2
-        return dist2 <= float(radius_px * radius_px)
-
-    t = ((cc - x0) * dx + (rr - y0) * dy) / denom
-    t = np.clip(t, 0.0, 1.0)
-
-    x_closest = x0 + t * dx
-    y_closest = y0 + t * dy
-
-    dist2 = (cc - x_closest) ** 2 + (rr - y_closest) ** 2
-    return dist2 <= float(radius_px * radius_px)
