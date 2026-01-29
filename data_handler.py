@@ -1,17 +1,39 @@
+# -*- coding: utf-8 -*-
+"""
+Endymion DataHandler (LOLA + Derived Products + Navigation Runs)
+
+Responsibilities:
+- Resolve LOLA tiles (runtime cache <-> persistent cache; download if allowed)
+- Parse .LBL metadata (minimal PDS3-like parsing)
+- Load .IMG raster as memmap
+- Extract ROI patches and standardise to Endymion convention:
+    * float32
+    * metres
+    * NaNs for nodata
+- Validate patches
+- Persist derived products (dem/slope/roughness)
+- Persist navigation runs (hazard/cost/path/meta)
+
+Notes:
+- 'persistent_dir' is the durable cache (e.g. Google Drive)
+- 'runtime_dir' is the fast cache (e.g. local Colab runtime)
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 
-import numpy as np
+import json
 import shutil
 import requests
-import json
+import numpy as np
 
-# ============================================================
+
+# 
 # Types
-# ============================================================
+# 
 
 ROI = Tuple[int, int, int, int]  # (r0, r1, c0, c1)
 
@@ -35,10 +57,10 @@ class LBLMeta:
     line_samples: int
     sample_type: str
     sample_bits: int
-    unit: Optional[str] = None            # e.g. "KILOMETER"
+    unit: Optional[str] = None
     scaling_factor: Optional[float] = None
-    offset: Optional[float] = None        # present in your LBL (1737.4) - not used now
-    missing_constant: Optional[float] = None  # not present in your snippet, but keep slot
+    offset: Optional[float] = None
+    missing_constant: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -50,14 +72,14 @@ class RasterMeta:
     tile_id: str
     shape: Tuple[int, int]
     dtype: str
-    units: str = "m"                      # Endymion convention: metres
+    units: str = "m"
     nodata: Optional[float] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class RasterPatch:
-    data: np.ndarray                      # 2D float32 with NaNs for nodata
+    data: np.ndarray
     meta: RasterMeta
     roi: ROI
 
@@ -68,13 +90,13 @@ class RasterTile:
     Internal convenience type (full tile, usually memmap-backed).
     """
     tile_id: str
-    data: np.ndarray                      # memmap or ndarray
+    data: np.ndarray
     lbl: LBLMeta
 
 
-# ============================================================
+# 
 # Exceptions
-# ============================================================
+# 
 
 class DataHandlerError(Exception):
     pass
@@ -92,30 +114,32 @@ class ValidationError(DataHandlerError):
     pass
 
 
-# ============================================================
+# 
 # DataHandler
-# ============================================================
-"""
-Endymion DataHandler:
-- resolves tiles (local cache; download hook optional)
-- parses .LBL
-- loads .IMG as memmap
-- extracts ROI
-- standardises to metres + float32 + NaNs
-- sanity checks
-"""
+# 
+
 class DataHandler:
-    
+    """
+    Endymion DataHandler:
+    - resolves tiles (local cache; download hook optional)
+    - parses .LBL
+    - loads .IMG as memmap
+    - extracts ROI
+    - standardises to metres + float32 + NaNs
+    - sanity checks
+    - stores derived products + navigation runs under persistent_dir/derived/
+    """
+
     def __init__(
         self,
         base_url: str,
-        tiles: list[LOLATileSpec],
-        cache_dir: str | Path = "./data_cache/lola",   # keep for backwards compat
-        persistent_dir: str | Path | None = None,      # NEW: Drive cache
-        runtime_dir: str | Path | None = None,         # NEW: local cache
-        allow_download: bool = True,                   # NEW
+        tiles: List[LOLATileSpec],
+        cache_dir: str | Path = "./data_cache/lola",   # backwards compat
+        persistent_dir: str | Path | None = None,      # Drive cache
+        runtime_dir: str | Path | None = None,         # local/runtime cache
+        allow_download: bool = True,
         force_download: bool = False,
-        timeout_s: int = 60,                           # NEW
+        timeout_s: int = 60,
     ):
         self.base_url = base_url.rstrip("/")
         self.tiles: Dict[str, LOLATileSpec] = {t.tile_id: t for t in tiles}
@@ -130,108 +154,17 @@ class DataHandler:
         self.allow_download = allow_download
         self.force_download = force_download
         self.timeout_s = timeout_s
-        self.cache_dir = self.runtime_dir  # for backwards compatibility
 
-    def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
-        """
-        Ensures (IMG, LBL) exist in runtime_dir (fast path).
-        Uses persistent_dir as the durable store.
-        """
-        rt_img = self.runtime_dir / spec.img_filename
-        rt_lbl = self.runtime_dir / spec.lbl_filename
+        # For backwards compatibility with older notebooks/code
+        self.cache_dir = self.runtime_dir
 
-        ps_img = self.persistent_dir / spec.img_filename
-        ps_lbl = self.persistent_dir / spec.lbl_filename
-
-        print(f"[ensure_local] runtime: {rt_img.exists()=}, {rt_lbl.exists()=}")
-        print(f"[ensure_local] persist: {ps_img.exists()=}, {ps_lbl.exists()=}")
-
-        # 1) runtime cache hit
-        if rt_img.exists() and rt_lbl.exists() and not self.force_download:
-            print("[ensure_local] HIT runtime")
-            return rt_img, rt_lbl
-
-        # 2) persistent cache hit -> copy to runtime
-        if ps_img.exists() and ps_lbl.exists() and not self.force_download:
-            print("[ensure_local] HIT persistent -> copying to runtime")
-            self._copy_if_needed(ps_img, rt_img)
-            self._copy_if_needed(ps_lbl, rt_lbl)
-            return rt_img, rt_lbl
-
-        # 3) need to download
-        if not self.allow_download:
-            # Keep your existing error style, but explain both locations
-            raise TileNotFoundError(
-                f"Tile not found.\n"
-                f"Runtime: {rt_img.name} / {rt_lbl.name} under {self.runtime_dir}\n"
-                f"Persistent: {ps_img.name} / {ps_lbl.name} under {self.persistent_dir}\n"
-                f"Downloads disabled (allow_download=False)."
-            )
-        print("[ensure_local] MISS -> downloading")
-
-        # Download into persistent, then copy to runtime
-        self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
-        self._download_file(f"{self.base_url}/{spec.lbl_filename}", ps_lbl)
-
-        self._copy_if_needed(ps_img, rt_img)
-        self._copy_if_needed(ps_lbl, rt_lbl)
-
-        if not rt_img.exists():
-            raise TileNotFoundError(f"Missing IMG file after download/copy: {rt_img}")
-        if not rt_lbl.exists():
-            raise TileNotFoundError(f"Missing LBL file after download/copy: {rt_lbl}")
-
-        return rt_img, rt_lbl
-
-    def _copy_if_needed(self, src: Path, dst: Path) -> None:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        # copy if missing or size mismatch
-        if (not dst.exists()) or (dst.stat().st_size != src.stat().st_size):
-            shutil.copy2(src, dst)
-
-    def _download_file(self, url: str, out_path: Path) -> None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # If already present and not forcing, skip
-        if out_path.exists() and not self.force_download:
-            print(f"[download] skip exists: {out_path.name}")
-            return
-
-        tmp = out_path.with_suffix(out_path.suffix + ".part")
-        print(f"[download] GET {url}")
-        with requests.get(url, stream=True, timeout=(15, 60)) as r:
-            r.raise_for_status()
-            total = int(r.headers.get("Content-Length", "0"))
-            done = 0
-            last_mb = -1
-
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1MB
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    done += len(chunk)
-
-                    # print every ~25MB
-                    mb = done // (25 * 1024 * 1024)
-                    if mb != last_mb:
-                        last_mb = mb
-                        if total:
-                            pct = 100.0 * done / total
-                            print(f"[download] {out_path.name}: {done/1e6:.1f}MB / {total/1e6:.1f}MB ({pct:.1f}%)")
-                        else:
-                            print(f"[download] {out_path.name}: {done/1e6:.1f}MB")
-
-        tmp.replace(out_path)
-        print(f"[download] DONE {out_path.name}")
-
-    # ===========================
+    # 
     # Public API
-    # ==========================
+    # 
 
     def get_patch(self, tile_id: str, roi: ROI, verbose: bool = False) -> RasterPatch:
         """
-        Main entry point used by your prototype runner / pipeline (not System_Controller).
+        Main entry point used by your prototype runner/pipeline.
         """
         tile_spec = self._get_tile(tile_id)
         img_path, lbl_path = self._ensure_local(tile_spec)
@@ -263,9 +196,9 @@ class DataHandler:
 
         return RasterPatch(data=patch_m, meta=meta, roi=roi)
 
-    # ----------------------------
+    # 
     # Tile resolution / local cache
-    # ----------------------------
+    # 
 
     def _get_tile(self, tile_id: str) -> LOLATileSpec:
         spec = self.tiles.get(tile_id)
@@ -275,10 +208,87 @@ class DataHandler:
             )
         return spec
 
+    def _ensure_local(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
+        """
+        Ensures (IMG, LBL) exist in runtime_dir (fast path).
+        Uses persistent_dir as the durable store.
+        """
+        rt_img = self.runtime_dir / spec.img_filename
+        rt_lbl = self.runtime_dir / spec.lbl_filename
 
-    # ----------------------------
+        ps_img = self.persistent_dir / spec.img_filename
+        ps_lbl = self.persistent_dir / spec.lbl_filename
+
+        # 1) runtime cache hit
+        if rt_img.exists() and rt_lbl.exists() and not self.force_download:
+            return rt_img, rt_lbl
+
+        # 2) persistent cache hit -> copy to runtime
+        if ps_img.exists() and ps_lbl.exists() and not self.force_download:
+            self._copy_if_needed(ps_img, rt_img)
+            self._copy_if_needed(ps_lbl, rt_lbl)
+            return rt_img, rt_lbl
+
+        # 3) download
+        if not self.allow_download:
+            raise TileNotFoundError(
+                f"Tile not found.\n"
+                f"Runtime: {rt_img.name} / {rt_lbl.name} under {self.runtime_dir}\n"
+                f"Persistent: {ps_img.name} / {ps_lbl.name} under {self.persistent_dir}\n"
+                f"Downloads disabled (allow_download=False)."
+            )
+
+        # Download into persistent, then copy to runtime
+        self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
+        self._download_file(f"{self.base_url}/{spec.lbl_filename}", ps_lbl)
+
+        self._copy_if_needed(ps_img, rt_img)
+        self._copy_if_needed(ps_lbl, rt_lbl)
+
+        if not rt_img.exists():
+            raise TileNotFoundError(f"Missing IMG file after download/copy: {rt_img}")
+        if not rt_lbl.exists():
+            raise TileNotFoundError(f"Missing LBL file after download/copy: {rt_lbl}")
+
+        return rt_img, rt_lbl
+
+    def _copy_if_needed(self, src: Path, dst: Path) -> None:
+        """
+        Copy src -> dst if missing or size mismatch.
+        """
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if (not dst.exists()) or (dst.stat().st_size != src.stat().st_size):
+            shutil.copy2(src, dst)
+
+    def _download_file(self, url: str, out_path: Path) -> None:
+        """
+        Streaming download with a temporary '.part' file.
+        """
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if out_path.exists() and not self.force_download:
+            return
+
+        tmp = out_path.with_suffix(out_path.suffix + ".part")
+
+        # Use conservative timeouts: (connect, read)
+        with requests.get(url, stream=True, timeout=(15, self.timeout_s)) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("Content-Length", "0"))
+            done = 0
+
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):  # 1MB
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    done += len(chunk)
+
+        tmp.replace(out_path)
+
+    # 
     # Label parsing (LBL)
-    # ----------------------------
+    # 
 
     def _parse_lbl(self, lbl_path: Path) -> LBLMeta:
         """
@@ -296,7 +306,7 @@ class DataHandler:
 
         for raw in text:
             line = raw.strip()
-            if not line or line.startswith("/*"):
+            if (not line) or line.startswith("/*"):
                 continue
             if "=" not in line:
                 continue
@@ -304,7 +314,6 @@ class DataHandler:
             key, val = [x.strip() for x in line.split("=", 1)]
             key_u = key.upper()
 
-            # Keep common scalar keys; ignore nested blocks safely
             if key_u in {
                 "LINES",
                 "LINE_SAMPLES",
@@ -317,7 +326,6 @@ class DataHandler:
             }:
                 fields[key_u] = val.strip().strip('"')
 
-        # Required fields
         def req_int(k: str) -> int:
             if k not in fields:
                 raise LabelParseError(f"LBL missing required field: {k}")
@@ -350,9 +358,9 @@ class DataHandler:
             extra={k: v for k, v in fields.items()},
         )
 
-    # ----------------------------
+    # 
     # IMG loading (float_img)
-    # ----------------------------
+    # 
 
     def _numpy_dtype_from_sample_type(self, sample_type: str, sample_bits: int) -> np.dtype:
         """
@@ -402,16 +410,14 @@ class DataHandler:
 
         return RasterTile(tile_id=tile_id, data=arr, lbl=lbl)
 
-    # ----------------------------
+    # 
     # ROI + standardisation
-    # ----------------------------
+    # 
 
     def _extract_roi(self, raster: np.ndarray, roi: ROI) -> np.ndarray:
         r0, r1, c0, c1 = roi
         if not (0 <= r0 < r1 <= raster.shape[0] and 0 <= c0 < c1 <= raster.shape[1]):
             raise ValidationError(f"ROI {roi} out of bounds for raster shape {raster.shape}")
-
-        # Copy so the patch is independent of the full tile memmap
         return np.array(raster[r0:r1, c0:c1], dtype=np.float32, copy=True)
 
     def _standardise_to_meters(self, patch: np.ndarray, lbl: LBLMeta) -> np.ndarray:
@@ -423,23 +429,20 @@ class DataHandler:
         """
         out = patch.astype(np.float32, copy=False)
 
-        # Apply missing constant -> NaN if label provides it
         if lbl.missing_constant is not None:
             out[out == float(lbl.missing_constant)] = np.nan
 
-        # Apply scaling if present (your LBL has SCALING_FACTOR=1)
         if lbl.scaling_factor is not None:
             out = (out * float(lbl.scaling_factor)).astype(np.float32, copy=False)
 
-        # Convert unit to metres (your LBL: UNIT = KILOMETER)
         if (lbl.unit or "").upper() in {"KILOMETER", "KILOMETRE", "KM"}:
             out = (out * 1000.0).astype(np.float32, copy=False)
 
         return out
 
-    # ----------------------------
+    # 
     # Validation / sanity checks
-    # ----------------------------
+    # 
 
     def _validate_patch(self, patch_m: np.ndarray, roi: ROI, meta: RasterMeta) -> None:
         r0, r1, c0, c1 = roi
@@ -462,16 +465,18 @@ class DataHandler:
             "max_m": vmax,
         })
 
-    # -------------------------
-    # derived products storage
-    # -------------------------
-
+    # 
+    # Derived products storage
+    # 
 
     def _roi_key(self, roi: ROI) -> str:
         r0, r1, c0, c1 = roi
         return f"roi_{r0}_{r1}_{c0}_{c1}"
 
     def derived_dir(self, tile_id: str, roi: ROI) -> Path:
+        """
+        Base folder for any derived artifacts for this (tile_id, roi).
+        """
         return self.persistent_dir / "derived" / tile_id / self._roi_key(roi)
 
     def save_derived(
@@ -480,18 +485,20 @@ class DataHandler:
         roi: ROI,
         dem_m: np.ndarray,
         features: Dict[str, np.ndarray],
-        meta_extra: Dict[str, Any] | None = None,
+        meta_extra: Optional[Dict[str, Any]] = None,
     ) -> Path:
+        """
+        Save core derived rasters (DEM + slope/roughness) and a small meta.json.
+        """
         out_dir = self.derived_dir(tile_id, roi)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        np.save(out_dir / "dem_m.npy", dem_m)
+        np.save(out_dir / "dem_m.npy", dem_m.astype(np.float32, copy=False))
 
-        # Save only known keys (avoid accidental huge dict dumps)
         if "slope_deg" in features:
-            np.save(out_dir / "slope_deg.npy", features["slope_deg"])
+            np.save(out_dir / "slope_deg.npy", features["slope_deg"].astype(np.float32, copy=False))
         if "roughness_rms" in features:
-            np.save(out_dir / "roughness_rms.npy", features["roughness_rms"])
+            np.save(out_dir / "roughness_rms.npy", features["roughness_rms"].astype(np.float32, copy=False))
 
         meta = {
             "tile_id": tile_id,
@@ -499,13 +506,16 @@ class DataHandler:
             "shape": list(dem_m.shape),
             "units": "m",
             "products": [p for p in ["dem_m", "slope_deg", "roughness_rms"]
-                if (out_dir / f"{p}.npy").exists()],
+                         if (out_dir / f"{p}.npy").exists()],
             "extra": meta_extra or {},
         }
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
         return out_dir
 
     def load_derived(self, tile_id: str, roi: ROI) -> Optional[Dict[str, Any]]:
+        """
+        Load derived rasters if they exist. Returns None if meta.json not found.
+        """
         out_dir = self.derived_dir(tile_id, roi)
         meta_path = out_dir / "meta.json"
         if not meta_path.exists():
@@ -527,6 +537,102 @@ class DataHandler:
             out["roughness_rms"] = np.load(rough_path)
 
         return out
+
+    # 
+    # Navigation runs storage (NEW)
+    # 
+
+    def save_navigation(
+        self,
+        tile_id: str,
+        roi: ROI,
+        hazard: np.ndarray,
+        cost: np.ndarray,
+        path_rc: np.ndarray,
+        nav_meta: Dict[str, Any],
+        run_name: str = "navigation_v1",
+        save_json_path: bool = True,
+    ) -> Path:
+        """
+        Save navigation artifacts next to derived rasters.
+
+        Layout:
+          derived/<tile_id>/<roi_key>/<run_name>/
+            hazard.npy
+            cost.npy
+            path_rc.npy
+            path_rc.json (optional)
+            nav_meta.json
+        """
+        out_dir = self.derived_dir(tile_id, roi) / run_name
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Ensure stable dtypes for reproducibility + small disk size
+        np.save(out_dir / "hazard.npy", hazard.astype(np.float32, copy=False))
+        np.save(out_dir / "cost.npy", cost.astype(np.float32, copy=False))
+        path_arr = np.asarray(path_rc, dtype=np.int32)
+        np.save(out_dir / "path_rc.npy", path_arr)
+
+        if save_json_path:
+            (out_dir / "path_rc.json").write_text(json.dumps(path_arr.tolist(), indent=2))
+
+        meta_out = {
+            "tile_id": tile_id,
+            "roi": list(roi),
+            "shape": list(hazard.shape),
+            "run_name": run_name,
+            "products": ["hazard", "cost", "path_rc"],
+            "nav_meta": nav_meta,
+        }
+        (out_dir / "nav_meta.json").write_text(json.dumps(meta_out, indent=2))
+        return out_dir
+
+    def load_navigation(
+        self,
+        tile_id: str,
+        roi: ROI,
+        run_name: str = "navigation_v1",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Load navigation artifacts saved by save_navigation().
+        Returns None if nav_meta.json doesn't exist.
+        """
+        out_dir = self.derived_dir(tile_id, roi) / run_name
+        meta_path = out_dir / "nav_meta.json"
+        if not meta_path.exists():
+            return None
+
+        meta = json.loads(meta_path.read_text())
+        out: Dict[str, Any] = {"meta": meta}
+
+        hz = out_dir / "hazard.npy"
+        cs = out_dir / "cost.npy"
+        pr = out_dir / "path_rc.npy"
+
+        if hz.exists():
+            out["hazard"] = np.load(hz)
+        if cs.exists():
+            out["cost"] = np.load(cs)
+        if pr.exists():
+            out["path_rc"] = np.load(pr)
+
+        return out
+
+    def list_navigation_runs(self, tile_id: str, roi: ROI) -> List[str]:
+        """
+        Convenience: list run folders under derived/<tile>/<roi_key>/ that contain nav_meta.json.
+        """
+        base = self.derived_dir(tile_id, roi)
+        if not base.exists():
+            return []
+
+        runs: List[str] = []
+        for p in base.iterdir():
+            if p.is_dir() and (p / "nav_meta.json").exists():
+                runs.append(p.name)
+        runs.sort()
+        return runs
+
 
 # Example canonical ROI for testing
 CANONICAL_ROI: ROI = (7072, 8096, 7072, 8096)
