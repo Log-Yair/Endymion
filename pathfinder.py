@@ -286,77 +286,65 @@ class Pathfinder:
             if not (0 <= r < H and 0 <= c < W):
                 raise ValueError(f"{name} {r,c} out of bounds for cost shape {cost.shape}.")
             
-    def find_path_corridor(
-        self,
-        cost: np.ndarray,
-        start: RC,
-        goal: RC,
-        corridor_radii: Sequence[int],
-        hazard: Optional[np.ndarray] = None,
-    ) -> Dict[str, Any]:
-        """
-        Try A* inside progressively wider corridor masks until a path is found.
+def find_path_corridor(
+    self,
+    cost: np.ndarray,
+    start: RC,
+    goal: RC,
+    corridor_radii: Sequence[int],
+    hazard: Optional[np.ndarray] = None,
+) -> Dict[str, Any]:
+    """
+    Try A* inside progressively wider corridor masks until a path is found.
 
-        Parameters
-        ----------
-        cost : np.ndarray
-            Cost grid. Blocked cells must be >= self.block_cost.
-        start, goal : (row, col)
-            ROI-local coordinates.
-        corridor_radii : list[int]
-            Radii (pixels) to try, from narrow to wide.
-        hazard : np.ndarray, optional
-            If provided, logs hazard mean/max along each candidate path.
+    Returns a dict with:
+      - best: the best path result (or None)
+      - best_radius_px: the corridor radius that worked (or None)
+      - experiment: list of per-radius logs
+    """
+    H, W = cost.shape
+    experiment: list[dict[str, Any]] = []
 
-        Returns
-        -------
-        dict with:
-        - best : result dict from find_path (or None)
-        - best_radius_px : int or None
-        - experiment : list of per-radius logs (success, expansions, etc.)
-        """
-        H, W = cost.shape
-        experiment = []
-        best = None
-        best_rad = None
+    best = None
+    best_rad = None
 
-        for rad in corridor_radii:
-            allowed = make_corridor_mask((H, W), start, goal, radius_px=int(rad))
+    for rad in corridor_radii:
+        allowed = make_corridor_mask((H, W), start, goal, radius_px=int(rad))
 
-            # If start/goal are outside corridor, skip this radius quickly
-            if not allowed[start] or not allowed[goal]:
-                experiment.append({
-                    "corridor_radius_px": int(rad),
-                    "success": False,
-                    "reason": "start_or_goal_outside_corridor",
-                })
-                continue
-
-            res = self.find_path(cost, start, goal, allowed_mask=allowed)
-
-            row = {
+        # Skip radii where start/goal aren't in corridor
+        if not allowed[start] or not allowed[goal]:
+            experiment.append({
                 "corridor_radius_px": int(rad),
-                "success": bool(res.get("success", False)),
-                "expansions": res.get("meta", {}).get("expansions", None),
-                "path_len": len(res.get("path_rc", [])),
-                "total_cost": float(res.get("total_cost", float("inf"))),
-            }
+                "success": False,
+                "reason": "start_or_goal_outside_corridor",
+            })
+            continue
 
-            # Optional hazard diagnostics for reporting
-            if hazard is not None and row["success"] and row["path_len"] > 0:
-                path_rc = np.asarray(res["path_rc"], dtype=np.int32)
-                vals = hazard[path_rc[:, 0], path_rc[:, 1]]
-                row["path_hazard_mean"] = float(np.mean(vals))
-                row["path_hazard_max"] = float(np.max(vals))
+        res = self.find_path(cost, start, goal, allowed_mask=allowed)
 
-            experiment.append(row)
+        row: dict[str, Any] = {
+            "corridor_radius_px": int(rad),
+            "success": bool(res.get("success", False)),
+            "expansions": res.get("meta", {}).get("expansions", None),
+            "path_len": len(res.get("path_rc", [])),
+            "total_cost": float(res.get("total_cost", float("inf"))),
+        }
 
-            if row["success"] and row["path_len"] > 0:
-                best = res
-                best_rad = int(rad)
-                break
+        # Optional hazard diagnostics (nice for logs / report)
+        if hazard is not None and row["success"] and row["path_len"] > 0:
+            path_rc = np.asarray(res["path_rc"], dtype=np.int32)
+            vals = hazard[path_rc[:, 0], path_rc[:, 1]]
+            row["path_hazard_mean"] = float(np.mean(vals))
+            row["path_hazard_max"] = float(np.max(vals))
 
-        return {"best": best, "best_radius_px": best_rad, "experiment": experiment}    
+        experiment.append(row)
+
+        if row["success"] and row["path_len"] > 0:
+            best = res
+            best_rad = int(rad)
+            break
+
+    return {"best": best, "best_radius_px": best_rad, "experiment": experiment}    
 
 
 
