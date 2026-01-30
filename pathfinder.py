@@ -2,33 +2,34 @@
 """
 Endymion Prototype : Safety Masks + Weighted A* (Pathfinder)
 
-This patch does TWO things:
-1) Adds a second "safety" mask based on hazard (e.g., hazard >= 0.95 is blocked).
-2) Adds Weighted A* to drastically reduce expansions:
-   - Standard A*:    f = g + h
-   - Weighted A*:    f = g + w*h   (w > 1 speeds up search, may be slightly suboptimal)
+Adds:
+1) Hazard blocking mask (hazard >= hazard_block -> blocked).
+2) Weighted A* (f = g + w*h) to reduce expansions.
 
-Important safety note:
-- Weighted A* does NOT make paths unsafe by itself.
-- Safety comes from the masks (blocked cells). Weighted A* only changes search efficiency.
+Safety note:
+- Weighted A* affects efficiency / optimality, not safety.
+- Safety is enforced via masks (blocked cells / corridor restrictions).
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Sequence, Any
 import heapq
 import numpy as np
-
 
 RC = Tuple[int, int]  # (row, col)
 
 
 def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: int) -> np.ndarray:
     """
-    Create a corridor (tube) mask around the straight-line segment start->goal.
+    Create a corridor/tube mask around the straight-line segment start->goal.
 
-    True = allowed search region
-    False = ignored by corridor-restricted A*
+    Returns
+    -------
+    mask : np.ndarray (H,W) bool
+        True  = allowed search region
+        False = ignored by corridor-restricted A*
     """
     H, W = shape
     (r0, c0) = start
@@ -36,7 +37,8 @@ def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: i
 
     rr, cc = np.indices((H, W), dtype=np.float32)
 
-    x0, y0 = float(c0), float(r0)  # x=col, y=row
+    # Use x=col, y=row for standard geometry formulas
+    x0, y0 = float(c0), float(r0)
     x1, y1 = float(c1), float(r1)
 
     dx = x1 - x0
@@ -44,9 +46,11 @@ def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: i
     denom = dx * dx + dy * dy
 
     if denom == 0.0:
+        # start == goal: corridor becomes a disk around the start point
         dist2 = (cc - x0) ** 2 + (rr - y0) ** 2
         return dist2 <= float(radius_px * radius_px)
 
+    # Project each cell onto the segment using parameter t in [0,1]
     t = ((cc - x0) * dx + (rr - y0) * dy) / denom
     t = np.clip(t, 0.0, 1.0)
 
@@ -56,9 +60,6 @@ def make_corridor_mask(shape: Tuple[int, int], start: RC, goal: RC, radius_px: i
     dist2 = (cc - x_closest) ** 2 + (rr - y_closest) ** 2
     return dist2 <= float(radius_px * radius_px)
 
-# ============================================================
-# 1) SECOND SAFETY MASK (hazard ceiling -> blocked cells)
-# ============================================================
 
 def build_cost_from_hazard(
     hazard: np.ndarray,
@@ -67,72 +68,69 @@ def build_cost_from_hazard(
     block_cost: float = 1e6,
 ) -> np.ndarray:
     """
-    Convert hazard [0..1] into a traversal cost grid, with a conservative safety block.
+    Convert hazard [0..1] into a traversal cost grid.
 
-    Parameters: 
-    
-    hazard : np.ndarray
-        Hazard raster in [0,1], float32, same shape as DEM patch.
-    alpha : float
-        Weight of hazard relative to distance (higher => avoid hazard more).
-    hazard_block : float
-        SECOND SAFETY MASK:
-        Cells with hazard >= hazard_block are treated as non-traversable.
-    block_cost : float
-        Cost used to mark blocked cells.
+    cost = 1 + alpha * hazard
 
-    Returns:
-    
-    cost : np.ndarray
-        Positive traversal cost grid, float32. Blocked cells set to block_cost.
+    Cells with hazard >= hazard_block become blocked (cost = block_cost).
     """
     if hazard.ndim != 2:
         raise ValueError("hazard must be a 2D raster.")
     if np.isnan(hazard).any():
         raise ValueError("hazard contains NaNs; fix/replace before building cost.")
 
-    # Base cost: always positive (distance still matters via the +1.0)
     cost = (1.0 + float(alpha) * hazard).astype(np.float32)
-
-    # Second safety mask: block very hazardous regions
     cost[hazard >= float(hazard_block)] = float(block_cost)
-
     return cost
 
-
-# 2) PATHFINDER WITH WEIGHTED A*
 
 @dataclass
 class Pathfinder:
     """
-    A* pathfinder over a 2D cost raster, with optional Weighted A*.
+    A* / Weighted A* over a 2D cost raster.
 
-    Key additions:
-    - heuristic_weight (w):
-        w = 1.0 => standard A* (optimal, slower)
-        w > 1.0 => weighted A* (faster, may be slightly suboptimal)
-    - block_cost:
-        any cell with cost >= block_cost is treated as blocked
+    Parameters
+    ----------
+    connectivity : int
+        4 or 8 neighbours
+    block_cost : float
+        Any cell with cost >= block_cost is treated as blocked
+    heuristic_weight : float
+        1.0 = standard A* (optimal)
+        >1.0 = weighted A* (faster, may be slightly suboptimal)
     """
     connectivity: int = 8
     block_cost: float = 1e6
-    heuristic_weight: float = 1.2  # set to 1.2 or 1.5 for speed
+    heuristic_weight: float = 1.2
 
-    def find_path(self, cost: np.ndarray, start: RC, goal: RC, allowed_mask: Optional[np.ndarray] = None) -> Dict[str, object]:
+    def find_path(
+        self,
+        cost: np.ndarray,
+        start: RC,
+        goal: RC,
+        allowed_mask: Optional[np.ndarray] = None
+    ) -> Dict[str, object]:
+        """Compute a least-cost path from start to goal on a cost grid."""
+        self._validate_inputs(cost, start, goal)
 
+        if self.heuristic_weight < 1.0:
+            raise ValueError("heuristic_weight must be >= 1.0 (1.0 = standard A*).")
+
+        # Corridor mask sanity checks (optional feature)
         if allowed_mask is not None:
             if allowed_mask.shape != cost.shape:
                 raise ValueError("allowed_mask must match cost shape.")
             if allowed_mask.dtype != bool:
                 allowed_mask = allowed_mask.astype(bool)
-            if not allowed_mask[start] or not allowed_mask[goal]:
-                return {"success": False, "path_rc": [], "total_cost": float("inf"),
-                        "meta": {"reason": "start_or_goal_outside_corridor"}}
-            
-        """Compute least-cost path from start to goal over cost grid."""
-        self._validate_inputs(cost, start, goal)
-        if self.heuristic_weight < 1.0:
-            raise ValueError("heuristic_weight must be >= 1.0 (1.0 = standard A*).")
+
+            # If start/goal are not inside corridor, fail immediately
+            if (not allowed_mask[start]) or (not allowed_mask[goal]):
+                return {
+                    "success": False,
+                    "path_rc": [],
+                    "total_cost": float("inf"),
+                    "meta": {"reason": "start_or_goal_outside_corridor"},
+                }
 
         H, W = cost.shape
         sr, sc = start
@@ -151,17 +149,16 @@ class Pathfinder:
         g = np.full((H, W), np.inf, dtype=np.float32)
         g[sr, sc] = 0.0
 
-        # Parent pointers for reconstruction
+        # Parent pointers
         parent_r = np.full((H, W), -1, dtype=np.int32)
         parent_c = np.full((H, W), -1, dtype=np.int32)
 
-        # Closed set: cells we have finalized
+        # Closed set
         closed = np.zeros((H, W), dtype=bool)
 
         # Priority queue entries: (f, g, r, c)
         pq: List[Tuple[float, float, int, int]] = []
-        h0 = self._heuristic(start, goal)
-        f0 = 0.0 + self.heuristic_weight * h0  # <-- Weighted A* here
+        f0 = self.heuristic_weight * self._heuristic(start, goal)
         heapq.heappush(pq, (float(f0), 0.0, sr, sc))
 
         expansions = 0
@@ -169,13 +166,11 @@ class Pathfinder:
         while pq:
             f_cur, g_cur, r, c = heapq.heappop(pq)
 
-            # Skip stale entries
             if closed[r, c]:
                 continue
             closed[r, c] = True
             expansions += 1
 
-            # Goal reached
             if (r, c) == (gr, gc):
                 path = self._reconstruct_path(parent_r, parent_c, start, goal)
                 return {
@@ -189,17 +184,17 @@ class Pathfinder:
                     },
                 }
 
-            # Explore neighbours
             for nr, nc, step_dist in self._neighbours(r, c, H, W):
+
+                # Corridor restriction MUST be checked before exploring
+                if allowed_mask is not None and not allowed_mask[nr, nc]:
+                    continue
+
                 if closed[nr, nc]:
                     continue
                 if cost[nr, nc] >= self.block_cost:
-                    continue  # blocked
+                    continue
 
-                if allowed_mask is not None and not allowed_mask[nr, nc]:
-                    continue  # outside allowed corridor
-
-                # Move cost uses average of cell costs * step distance
                 move_cost = 0.5 * (cost[r, c] + cost[nr, nc]) * step_dist
                 tentative = g[r, c] + move_cost
 
@@ -209,10 +204,8 @@ class Pathfinder:
                     parent_c[nr, nc] = c
 
                     h = self._heuristic((nr, nc), goal)
-                    f = tentative + self.heuristic_weight * h  # <-- Weighted A* here
+                    f = tentative + self.heuristic_weight * h
                     heapq.heappush(pq, (float(f), float(tentative), nr, nc))
-
-                
 
         return {
             "success": False,
@@ -221,17 +214,74 @@ class Pathfinder:
             "meta": {"reason": "no_path", "expansions": expansions},
         }
 
+    def find_path_corridor(
+        self,
+        cost: np.ndarray,
+        start: RC,
+        goal: RC,
+        corridor_radii: Sequence[int],
+        hazard: Optional[np.ndarray] = None,
+    ) -> Dict[str, Any]:
+        """
+        Try progressively wider corridor masks until a path is found.
+
+        Returns:
+        - best: best path result (or None)
+        - best_radius_px: radius that worked (or None)
+        - experiment: list of per-radius logs
+        """
+        H, W = cost.shape
+        experiment: List[Dict[str, Any]] = []
+
+        best = None
+        best_rad = None
+
+        for rad in corridor_radii:
+            allowed = make_corridor_mask((H, W), start, goal, radius_px=int(rad))
+
+            # Fail fast if corridor doesn't contain endpoints
+            if not allowed[start] or not allowed[goal]:
+                experiment.append({
+                    "corridor_radius_px": int(rad),
+                    "success": False,
+                    "expansions": None,
+                    "path_len": 0,
+                    "total_cost": float("inf"),
+                    "reason": "start_or_goal_outside_corridor",
+                })
+                continue
+
+            res = self.find_path(cost, start, goal, allowed_mask=allowed)
+
+            row: Dict[str, Any] = {
+                "corridor_radius_px": int(rad),
+                "success": bool(res.get("success", False)),
+                "expansions": res.get("meta", {}).get("expansions", None),
+                "path_len": len(res.get("path_rc", [])),
+                "total_cost": float(res.get("total_cost", float("inf"))),
+            }
+
+            if hazard is not None and row["success"] and row["path_len"] > 0:
+                path_rc = np.asarray(res["path_rc"], dtype=np.int32)
+                vals = hazard[path_rc[:, 0], path_rc[:, 1]]
+                row["path_hazard_mean"] = float(np.mean(vals))
+                row["path_hazard_max"] = float(np.max(vals))
+
+            experiment.append(row)
+
+            if row["success"] and row["path_len"] > 0:
+                best = res
+                best_rad = int(rad)
+                break
+
+        return {"best": best, "best_radius_px": best_rad, "experiment": experiment}
+
     # -------------------------
     # Helpers
     # -------------------------
 
     def _heuristic(self, a: RC, b: RC) -> float:
-        """
-        Distance-only heuristic.
-        NOTE: It ignores hazard; safety is enforced via blocking masks.
-
-        For 8-connectivity, octile distance; for 4-connectivity, Manhattan.
-        """
+        """Distance-only heuristic (octile for 8-connectivity, Manhattan for 4)."""
         (r0, c0), (r1, c1) = a, b
         dr = abs(r1 - r0)
         dc = abs(c1 - c0)
@@ -285,67 +335,3 @@ class Pathfinder:
         for name, (r, c) in [("start", start), ("goal", goal)]:
             if not (0 <= r < H and 0 <= c < W):
                 raise ValueError(f"{name} {r,c} out of bounds for cost shape {cost.shape}.")
-            
-    def find_path_corridor(
-        self,
-        cost: np.ndarray,
-        start: RC,
-        goal: RC,
-        corridor_radii: Sequence[int],
-        hazard: Optional[np.ndarray] = None,
-    ) -> Dict[str, Any]:
-        """
-        Try A* inside progressively wider corridor masks until a path is found.
-
-        Returns a dict with:
-        - best: the best path result (or None)
-        - best_radius_px: the corridor radius that worked (or None)
-        - experiment: list of per-radius logs
-        """
-        H, W = cost.shape
-        experiment: list[dict[str, Any]] = []
-
-        best = None
-        best_rad = None
-
-        for rad in corridor_radii:
-            allowed = make_corridor_mask((H, W), start, goal, radius_px=int(rad))
-
-            # Skip radii where start/goal aren't in corridor
-            if not allowed[start] or not allowed[goal]:
-                experiment.append({
-                    "corridor_radius_px": int(rad),
-                    "success": False,
-                    "reason": "start_or_goal_outside_corridor",
-                })
-                continue
-
-            res = self.find_path(cost, start, goal, allowed_mask=allowed)
-
-            row: dict[str, Any] = {
-                "corridor_radius_px": int(rad),
-                "success": bool(res.get("success", False)),
-                "expansions": res.get("meta", {}).get("expansions", None),
-                "path_len": len(res.get("path_rc", [])),
-                "total_cost": float(res.get("total_cost", float("inf"))),
-            }
-
-            # Optional hazard diagnostics (nice for logs / report)
-            if hazard is not None and row["success"] and row["path_len"] > 0:
-                path_rc = np.asarray(res["path_rc"], dtype=np.int32)
-                vals = hazard[path_rc[:, 0], path_rc[:, 1]]
-                row["path_hazard_mean"] = float(np.mean(vals))
-                row["path_hazard_max"] = float(np.max(vals))
-
-            experiment.append(row)
-
-            if row["success"] and row["path_len"] > 0:
-                best = res
-                best_rad = int(rad)
-                break
-
-        return {"best": best, "best_radius_px": best_rad, "experiment": experiment}    
-
-
-
-
