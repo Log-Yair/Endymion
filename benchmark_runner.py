@@ -30,6 +30,7 @@ import numpy as np
 from data_handler import DataHandler, ROI
 from hazard_assessor import HazardAssessor
 from pathfinder import Pathfinder, build_cost_from_hazard
+from evaluator import Evaluator
 
 
 RC = Tuple[int, int]
@@ -135,6 +136,7 @@ class BenchmarkRunner:
             hazard=hazard,  # enables per-path hazard mean/max in the experiment log
         )
 
+        # obtain best result, best radius, experiment log
         best = corr["best"]
         best_radius = corr["best_radius_px"]
         experiment = corr["experiment"]
@@ -184,9 +186,9 @@ class BenchmarkRunner:
 
         (out_dir / "nav_meta.json").write_text(json.dumps(nav_meta, indent=2))
 
-        # Optional: if you have Evaluator implemented, call it here and write metrics.json
-        # evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m)
-        # evaluator.save("metrics.json")
+        # 6) Evaluation (dunno what metrics yet; placeholder)
+        evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m)
+        evaluator.save("metrics.json")
 
         return {
             "case_id": case_id,
