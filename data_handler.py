@@ -7,9 +7,9 @@ Responsibilities:
 - Parse .LBL metadata (minimal PDS3-like parsing)
 - Load .IMG raster as memmap
 - Extract ROI patches and standardise to Endymion convention:
-    * float32
-    * metres
-    * NaNs for nodata
+    - float32
+    - metres
+    - NaNs for nodata
 - Validate patches
 - Persist derived products (dem/slope/roughness)
 - Persist navigation runs (hazard/cost/path/meta)

@@ -24,6 +24,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
+from webbrowser import get
 
 import numpy as np
 
@@ -176,10 +177,19 @@ class BenchmarkRunner:
                 },
                 "result": {
                     "success": success,
-                    "total_cost": float(best["total_cost"]) if success else float("inf"),
+                    "total_cost": float(best["total_cost"]) if success else None,   # JSON-safe
                     "path_len": int(path_rc.shape[0]),
-                    "expansions": int(best["meta"]["expansions"]) if success else int(best.get("meta", {}).get("expansions", -1)),
+                    "expansions": int((best.get("meta") or {}).get("expansions", -1)) if success else int((best.get("meta") or {}).get("expansions", -1)),
+                    "failure_reason": None if success else "no_path_found_in_any_corridor",
                 },
+                "benchmark": {
+                    "benchmark_id": self.cfg.benchmark_id,
+                    "case_id": case_id,
+                    "tier": case.get("tier"),
+                    "hazard_model_id": hazard_model_id
+                },
+
+                
                 "corridor_experiment": experiment,
             }
         }
