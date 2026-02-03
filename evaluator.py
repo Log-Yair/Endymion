@@ -33,13 +33,14 @@ class Evaluator:
         self.run_dir = Path(run_dir)
         self.pixel_size_m = float(pixel_size_m)
 
-        # --- Required artifacts ---
+        # --- Required inputs ---
         self.hazard = np.load(self.run_dir / "hazard.npy")
         self.cost = np.load(self.run_dir / "cost.npy")
         self.path_rc = np.load(self.run_dir / "path_rc.npy")
         self.meta = self._load_nav_meta(self.run_dir / "nav_meta.json")
+        
+        self.nav = self.meta.get("nav_meta", self.meta) # backward compatibility
 
-        self.nav = self.meta["nav_meta"]
 
     # ------------------------------------------------------------------
     # Loading helpers
@@ -93,15 +94,15 @@ class Evaluator:
 
     @staticmethod
     def _safe_mean(arr: np.ndarray) -> Optional[float]:
-        return float(np.mean(arr)) if arr.size else None
+        return float(np.mean(arr)) if arr.size else None # mean of empty array is undefined
 
     @staticmethod
     def _safe_max(arr: np.ndarray) -> Optional[float]:
-        return float(np.max(arr)) if arr.size else None
+        return float(np.max(arr)) if arr.size else None # max of empty array is undefined
 
     @staticmethod
     def _safe_sum(arr: np.ndarray) -> float:
-        return float(np.sum(arr)) if arr.size else 0.0
+        return float(np.sum(arr)) if arr.size else 0.0 # sum of empty array is zero 
 
     # ------------------------------------------------------------------
     # Main evaluation
@@ -171,7 +172,7 @@ class Evaluator:
         sr, sc = self.nav["start_rc"]
         gr, gc = self.nav["goal_rc"]
 
-        straight_px = float(np.sqrt((gr - sr) ** 2 + (gc - sc) ** 2))
+        straight_px = float(np.sqrt((gr - sr) ** 2 + (gc - sc) ** 2))  
         straight_m = straight_px * self.pixel_size_m
 
         detour = (path_len_m / straight_m) if straight_m > 0 else np.nan
@@ -186,13 +187,25 @@ class Evaluator:
         haz_sum = self._safe_sum(Hf)
         haz_per_m = (haz_sum / path_len_m) if path_len_m > 0 else np.nan
 
-        hazard_block = float(self.nav["cost_model"]["hazard_block"])
-        frac_blocked = float(np.mean(Hf >= hazard_block)) if Hf.size else np.nan
+        hazard_block = float(self.nav["cost_model"]["hazard_block"]) # from nav_meta
+        frac_blocked = float(np.mean(Hf >= hazard_block)) if Hf.size else np.nan # fraction of path nodes above blocking hazard
 
-        global_mean = float(self.nav["hazard_assessor"]["stats"]["hazard_mean"])
-        haz_ratio = (float(haz_mean) / global_mean) if (haz_mean is not None and global_mean > 0) else np.nan
+        # Try metadata first
+        global_mean = (
+            self.nav.get("hazard_assessor", {})
+                .get("stats", {})
+                .get("hazard_mean", np.nan)
+        )
 
-        safety_score = (1.0 / (1.0 + haz_per_m)) if np.isfinite(haz_per_m) else np.nan
+        # If missing/invalid, compute it directly from the hazard raster
+        if not np.isfinite(global_mean):
+            global_mean = float(np.mean(Hf)) if Hf.size else np.nan
+
+        global_mean = float(global_mean) if np.isfinite(global_mean) else np.nan
+
+        haz_ratio = (float(haz_mean) / global_mean) if (haz_mean is not None and global_mean > 0) else np.nan # ratio of path hazard to global mean hazard
+
+        safety_score = (1.0 / (1.0 + haz_per_m)) if np.isfinite(haz_per_m) else np.nan  # simple safety score inversely related to hazard per meter
 
         # ---- efficiency ----
         cost_sum = self._safe_sum(Cf)
