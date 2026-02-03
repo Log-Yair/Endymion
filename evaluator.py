@@ -190,16 +190,18 @@ class Evaluator:
         hazard_block = float(self.nav["cost_model"]["hazard_block"]) # from nav_meta
         frac_blocked = float(np.mean(Hf >= hazard_block)) if Hf.size else np.nan # fraction of path nodes above blocking hazard
 
-        # Try metadata first
+        ha = self.nav.get("hazard_assessor")
+        if ha is None:
+            # Backward-compat: older notebook schema
+            ha = self.nav.get("hazard_model", {})
+
         global_mean = (
-            self.nav.get("hazard_assessor", {})
-                .get("stats", {})
-                .get("hazard_mean", np.nan)
+            ha.get("stats", {}).get("hazard_mean", np.nan)
         )
 
-        # If missing/invalid, compute it directly from the hazard raster
         if not np.isfinite(global_mean):
             global_mean = float(np.mean(Hf)) if Hf.size else np.nan
+
 
         global_mean = float(global_mean) if np.isfinite(global_mean) else np.nan
 
