@@ -21,8 +21,9 @@ Works on other IDEs too, but looses in performance
 1. Open the demo notebook in Colab (upload it, or open directly from GitHub).
 2. Run the notebook **top-to-bottom**.
 
-### Drive vs Local Storage (important)
+## Drive vs Local Storage (important)
 Near the top of the notebook you will see:
 
 USE_DRIVE = True
-change to False if you dont wish to install it on your drive
+
+**Change to False if you dont wish to install it on your drive**
