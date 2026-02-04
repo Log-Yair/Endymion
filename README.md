@@ -6,7 +6,7 @@ This repository contains the backend implementation of **Endymion** (DataHandler
 and a runnable **prototype pipeline** that reproduces the demo outputs.
 
 ### Quickstart (Recommended: Google Colab)
-1. Open the notebook: `notebooks/Endymion_Prototype_Pipeline.ipynb`
+1. Open the notebook: - `notebooks/w20475998_Endymion_Prototype_Demo_v6_2.ipynb`
 2. Run cells top-to-bottom.
 3. Outputs (derived rasters + navigation runs + metrics) will be saved under:
    `derived/<tile_id>/roi_<...>/`
@@ -14,7 +14,7 @@ and a runnable **prototype pipeline** that reproduces the demo outputs.
 
 🔹 Prototype Demonstration  
 The prototype pipeline notebook is available on the `notebooks` branch:
-https://github.com/<user>/<repo>/tree/notebooks/notebooks/Endymion_Prototype_Pipeline.ipynb
+https://github.com/<user>/<repo>/tree/notebooks/notebooks/w20475998_Endymion_Prototype_Demo_v6_2.ipynb
 
 ### Quickstart (Local Python)
 > Python 3.10+ recommended
