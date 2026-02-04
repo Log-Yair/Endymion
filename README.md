@@ -11,6 +11,11 @@ and a runnable **prototype pipeline** that reproduces the demo outputs.
 3. Outputs (derived rasters + navigation runs + metrics) will be saved under:
    `derived/<tile_id>/roi_<...>/`
 
+
+🔹 Prototype Demonstration  
+The prototype pipeline notebook is available on the `notebooks` branch:
+https://github.com/<user>/<repo>/tree/notebooks/notebooks/Endymion_Prototype_Pipeline.ipynb
+
 ### Quickstart (Local Python)
 > Python 3.10+ recommended
 
