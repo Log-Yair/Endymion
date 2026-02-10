@@ -10,7 +10,8 @@ and a runnable **prototype pipeline** that reproduces the demo outputs.
 2. Run cells top-to-bottom.
 3. Outputs (derived rasters + navigation runs + metrics) will be saved under:
    `derived/<tile_id>/roi_<...>/`
-
+Below is the Timeline used on this project:
+https://www.notion.so/Endymion-Schedule-2923a4ca43a08056886dd9d59c2555a3?source=copy_link
 
 🔹 Prototype Demonstration  
 The prototype pipeline notebook is available on the `notebooks` branch:
