@@ -1,5 +1,5 @@
 
-## Prototype Demo (Runnable Notebook)
+## Prototype Demo Phase 1 - not final(Runnable Notebook)
 
 This repository contains the backend implementation of **Endymion (Phase-1 Prototype)** and an **official demo notebook** that runs the complete prototype pipeline end-to-end:
 
