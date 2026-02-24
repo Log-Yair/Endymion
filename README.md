@@ -11,7 +11,7 @@ This repository contains the backend implementation of **Endymion (Phase-1 Proto
 - Save artefacts + evaluation metrics (`metrics.json`)
 
 The official demo notebook is:
-- `w20475998_Endymion_Prototype_Demo_v6_2.ipynb`
+- `w20475998_Endymion_Prototype_Phase1_Demo.ipynb`
 
 ---
 
