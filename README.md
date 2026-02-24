@@ -15,7 +15,7 @@ https://www.notion.so/Endymion-Schedule-2923a4ca43a08056886dd9d59c2555a3?source=
 
 🔹 Prototype Demonstration  
 The prototype pipeline notebook is available on the `notebooks` branch:
-https://github.com/Log-yair/Endymion/notebooks/notebooks/w20475998_Endymion_Prototype_Phase1_Demo.ipynb
+https://github.com/Log-yair/Endymion/notebooks/w20475998_Endymion_Prototype_Phase1_Demo.ipynb
 
 ### Quickstart (Local Python)
 > Python 3.10+ recommended
