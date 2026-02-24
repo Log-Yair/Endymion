@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
 
 import json
-import shutil
-import requests
+import shutil # for file copying
+import requests # for HTTP downloads
 import numpy as np
 
 
