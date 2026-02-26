@@ -34,16 +34,42 @@ import pandas as pd
 import rasterio
 from rasterio.warp import transform
 
+#============================================================================
+# Type DEFINITION for Region of Interest (ROI) in pixel coordinates
+#============================================================================
+
 ROI = Tuple[int, int, int, int]  # (r0,r1,c0,c1 = (row_start, row_end, col_start, col_end))
+
+
+#===========================================================================
+# CraterRaster configuration dataclass
+#===========================================================================
 
 @dataclass
 class CraterRaster:
-    pixel_size_m: float = 20.0 # meters per pixel
+    ''' Configuration parameters for rasterising crater catalogue '''
+
+    pixel_size_m: float = 20.0 # DEM resolution on meters per pixel
+    
+    ''' Crater size limits (in meters) for rasterisation '''
+
     min_diameter: float = 2.0 # minimum crater diameter in meters
+
     max_diameter: Optional[float] = None # maximum crater diameter in meters (None = no limit)
-    col_lat : str= "LAT_CIRC_IMG" # column name for latitude in input CSV
-    col_lon : str= "LON_CIRC_IMG" # column name for longitude in input CSV
-    col_diam_km : str= "DIAM_CIRC_IMG" # column name for diameter in input CSV
+
+    ''' Column names in the input CSV for crater properties '''
+
+    latitude_column: str = "LAT_CIRC_IMG" # column name for crater latitude in the input CSV
+
+    longitude_column: str = "LON_CIRC_IMG" # column name for crater longitude in the input CSV
+
+    diameter_km_column: str = "DIAM_CIRC_IMG" # column name for crater diameter in kilometers in the input CSV
+
+
+
+# ----------------------------------------------------------------------------
+# Core Geometry Utility
+# ----------------------------------------------------------------------------
 
 def raster_circle(mask :np.ndarray, r0 :int, c0 :int, radius_px :int) -> None:
     """Rasterise a circle into the mask at (r0,c0) with given radius in pixels."""
