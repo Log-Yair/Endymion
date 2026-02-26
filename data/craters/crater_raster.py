@@ -167,4 +167,19 @@ def build_crater_mask_from_catalogue(
         latituded = crater_df[config.latitude_column].to_numpy(dtype=float) # extract latitude column as numpy array of floats
         longituded = crater_df[config.longitude_column].to_numpy(dtype=float) # extract longitude column as numpy array of floats
 
-        # 
+        # normlasisee crater longitud into [-180, 180] range to avoid issues with dateline crossing
+        longitudes = ((longituded + 180) % 360) - 180
+
+        # reproject crater coordinates from WGS84 to DEM CRS
+        projected_x, projected_y = transform(
+            src_crs='EPSG:4326', # WGS84
+            dst_crs=dataset.crs, # DEM native CRS
+            xs=longitudes,
+            ys=latituded
+        )
+
+        # convert projected coordinates to pixel indices
+        pixel_rows, pixel_cols = dataset.index(projected_x, projected_y) # get pixel indices for each crater center
+
+    pixel_cols = np.array(pixel_cols) # convert to numpy array for easier indexing
+    pixel_rows = np.array(pixel_rows) # convert to numpy array for easier indexing
