@@ -71,15 +71,43 @@ class CraterRaster:
 # Core Geometry Utility
 # ----------------------------------------------------------------------------
 
-def raster_circle(mask :np.ndarray, r0 :int, c0 :int, radius_px :int) -> None:
-    """Rasterise a circle into the mask at (r0,c0) with given radius in pixels."""
-    rows, cols = mask.shape
-    r_min = max(0, r0 - radius_px)
-    r_max = min(rows, r0 + radius_px + 1)
-    c_min = max(0, c0 - radius_px)
-    c_max = min(cols, c0 + radius_px + 1)
+def rasterise_filled_circle(
+    mask: np.ndarray,
+    center_row: int,
+    center_col: int,
+    radius_px: int
+) -> None:
+    """
+    Rasterises a filled circle into the mask array.
 
-    for r in range(r_min, r_max):
-        for c in range(c_min, c_max):
-            if (r - r0) ** 2 + (c - c0) ** 2 <= radius_px ** 2:
+    Parameters
+    ----------
+    mask : np.ndarray
+        Binary output array (modified in-place).
+
+    center_row, center_col : int
+        Pixel coordinates within ROI-local grid.
+
+    radius_px : int
+        Radius in pixels.
+
+    Notes
+    -----
+    - Uses bounding-box restriction to avoid scanning entire grid.
+    - Distance check enforces circular shape.
+    """
+
+    grid_height, grid_width = mask.shape # dimensions of the ROI grid
+
+    row_min = max(0, center_row - radius_px) # restrict to bounding box around the circle
+
+    row_max = min(grid_height, center_row + radius_px + 1) # +1 because upper bound is exclusive in Python slicing
+
+    col_min = max(0, center_col - radius_px) # restrict to bounding box around the circle
+
+    col_max = min(grid_width, center_col + radius_px + 1) # +1 because upper bound is exclusive in Python slicing
+
+    for r in range(row_min, row_max):
+        for c in range(col_min, col_max):
+            if (r - center_row) ** 2 + (c - center_col) ** 2 <= radius_px ** 2:
                 mask[r, c] = 1
