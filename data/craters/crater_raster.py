@@ -46,7 +46,7 @@ ROI = Tuple[int, int, int, int]  # (r0,r1,c0,c1 = (row_start, row_end, col_start
 #===========================================================================
 
 @dataclass
-class CraterRaster:
+class CraterRasterConfig:
     ''' Configuration parameters for rasterising crater catalogue '''
 
     pixel_size_m: float = 20.0 # DEM resolution on meters per pixel
@@ -111,3 +111,31 @@ def rasterise_filled_circle(
         for c in range(col_min, col_max):
             if (r - center_row) ** 2 + (c - center_col) ** 2 <= radius_px ** 2:
                 mask[r, c] = 1
+
+# ============================================================================
+# Main function to rasterise crater catalogue into binary mask
+# ============================================================================
+
+def build_crater_mask_from_catalogue(
+    *,
+    robbins_csv_path: str | Path,
+    dem_img_path: str | Path,
+    roi_pixels: ROI,
+    config: CraterRasterConfig = CraterRasterConfig(),
+) -> Dict[str, object]:
+    """
+    Converts Robbins crater catalogue to ROI-aligned crater mask.
+
+    Steps:
+    1. Load crater catalogue.
+    2. Reproject lat/lon to DEM CRS.
+    3. Convert projected coords → pixel indices.
+    4. Filter to ROI bounds.
+    5. Rasterise crater circles into ROI-local mask.
+    """
+
+    # ------------------------------------------------------------------------
+    # Load crater catalogue
+    # ------------------------------------------------------------------------
+
+    crater_df = pd.read_csv(robbins_csv_path)
