@@ -96,8 +96,11 @@ def rasterise_filled_circle(
     - Uses bounding-box restriction to avoid scanning entire grid.
     - Distance check enforces circular shape.
     """
-
+    
+    ''' Get grid dimensions for bounding box restriction '''
     grid_height, grid_width = mask.shape # dimensions of the ROI grid
+
+    ''' Calculate bounding box limits, ensuring they stay within grid bounds '''
 
     row_min = max(0, center_row - radius_px) # restrict to bounding box around the circle
 
@@ -139,3 +142,29 @@ def build_crater_mask_from_catalogue(
     # ------------------------------------------------------------------------
 
     crater_df = pd.read_csv(robbins_csv_path)
+
+    required_columns = [
+        config.latitude_column,
+        config.longitude_column,
+        config.diameter_km_column
+    ]
+
+    for col in required_columns:
+        if col not in crater_df.columns:
+            raise ValueError(f"Required column '{col}' not found in crater catalogue CSV.")
+    
+    crater_df = crater_df[required_columns].dropna.copy() # keep only required columns and drop rows with missing values
+
+    # ------------------------------------------------------------------------
+    # Open DEM with rasterio to get CRS and transform
+    # ------------------------------------------------------------------------
+
+    with rasterio.open(dem_img_path) as dataset:
+        if dataset.crs is None:
+            raise ValueError("DEM image does not have a defined CRS.")
+        
+        # extract geographic coordinates
+        latituded = crater_df[config.latitude_column].to_numpy(dtype=float) # extract latitude column as numpy array of floats
+        longituded = crater_df[config.longitude_column].to_numpy(dtype=float) # extract longitude column as numpy array of floats
+
+        # 
