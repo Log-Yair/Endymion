@@ -67,19 +67,9 @@ class CraterPredictor:
         """
         # pick any raster as shape reference
         ref = self.get_reference_raster(features) # helper function to find a 2D raster in features to use as shape reference for the output probability map
-        
-        for v in features.values():
-            if isinstance(v, np.ndarray) and v.ndim == 2:
-                ref = v
-                break
-        if ref is None:
-            raise ValueError("No 2D feature rasters provided to CraterPredictor.")
 
-        proba = np.zeros(ref.shape, dtype=np.float32)
+        if self.model_id == "stub_v1":
 
-        meta = {
-            "model_id": self.model_id,
-            "note": "Phase-1 stub: returns all zeros",
-        }
-
-        return {"crater_proba": proba, "meta": meta}
+            proba = np.zeros(ref.shape, dtype=np.float32) # return all zeros for stub mode
+            return {"crater_proba": proba,
+                    "meta":{"model_id": self.model_id, "note": "Phase-1 stub: returns all zeros"}} # include model_id in metadata for traceability
