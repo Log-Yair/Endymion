@@ -183,3 +183,38 @@ def build_crater_mask_from_catalogue(
 
     pixel_cols = np.array(pixel_cols) # convert to numpy array for easier indexing
     pixel_rows = np.array(pixel_rows) # convert to numpy array for easier indexing
+
+    # ------------------------------------------------------------------------
+    # Filter craters to those whose centers fall within the ROI bounds
+    # ------------------------------------------------------------------------
+    row_start, row_end, col_start, col_end = roi_pixels # unpack ROI pixel bounds
+
+    # Create boolean mask for craters whose centers are
+    inside_roi = (
+        (pixel_rows >= row_start) &
+        (pixel_rows < row_end) &
+        (pixel_cols >= col_start) &
+        (pixel_cols < col_end)
+    )
+
+    crater_df_roi = crater_df.loc[inside_roi].copy() # filter crater dataframe to only include craters whose centers are inside the ROI
+
+    pixel_rows_roi = pixel_rows[inside_roi] # filter pixel row indices to only include those whose centers are inside the ROI
+    pixel_cols_roi = pixel_cols[inside_roi] # filter pixel column indices to only include those whose centers are inside the ROI
+
+    # ------------------------------------------------------------------------
+    # Convert crater diameter (km) → pixel radius
+    # ------------------------------------------------------------------------
+
+    diameter_km = crater_df_roi[config.diameter_km_column].to_numpy(dtype=float)
+
+    diameter_px = (diameter_km * 1000.0) / config.pixel_resolution_m
+
+    # Apply size filters
+    valid = diameter_px >= config.minimum_diameter_px
+    if config.maximum_diameter_px is not None:
+        valid &= diameter_px <= config.maximum_diameter_px
+
+    diameter_px = diameter_px[valid]
+    pixel_rows_roi = pixel_rows_roi[valid]
+    pixel_cols_roi = pixel_cols_roi[valid]
