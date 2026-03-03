@@ -1,5 +1,4 @@
 # ============================================================================
-# Endymion Phase-2
 # Crater Catalogue -> ROI-Aligned Raster
 # ============================================================================
 """
@@ -119,30 +118,32 @@ def build_crater_mask_from_catalogue(
     5) Rasterise each crater as a filled circle in ROI-local pixel space.
     """
 
-    robbins_csv_path = Path(robbins_csv_path)
+    robbins_csv_path = Path(robbins_csv_path) # ensure Path object for consistency
     dem_img_path = Path(dem_img_path)
 
     # ---- Load catalogue ----
-    crater_df = pd.read_csv(robbins_csv_path)
-
+    crater_df = pd.read_csv(robbins_csv_path) # problem here if file is missing or malformed
+    
+    # Check required columns exist
     required_columns = [
         config.latitude_column,
         config.longitude_column,
         config.diameter_km_column,
     ]
+
     for col in required_columns:
         if col not in crater_df.columns:
             raise ValueError(f"Required column '{col}' not found in crater catalogue CSV.")
 
-    crater_df = crater_df[required_columns].dropna().copy()
+    crater_df = crater_df[required_columns].dropna().copy() # keep only needed columns and drop rows with missing values
 
     # ---- Open DEM to obtain CRS + pixel transform ----
     with rasterio.open(dem_img_path) as ds:
         if ds.crs is None:
             raise ValueError("DEM image does not have a defined CRS.")
 
-        lats = crater_df[config.latitude_column].to_numpy(dtype=float)
-        lons = crater_df[config.longitude_column].to_numpy(dtype=float)
+        lats = crater_df[config.latitude_column].to_numpy(dtype=float) # convert to numpy array of floats
+        lons = crater_df[config.longitude_column].to_numpy(dtype=float) # convert to numpy array of floats
 
         # Normalise lon into [-180, 180]
         lons = ((lons + 180.0) % 360.0) - 180.0
@@ -158,12 +159,13 @@ def build_crater_mask_from_catalogue(
         # Projected (x,y) -> pixel indices (row, col)
         pixel_rows, pixel_cols = ds.index(xs, ys)
 
-    pixel_rows = np.asarray(pixel_rows)
-    pixel_cols = np.asarray(pixel_cols)
+    pixel_rows = np.asarray(pixel_rows) # convert to numpy array of ints
+    pixel_cols = np.asarray(pixel_cols) # convert to numpy array of ints
 
     # ---- Filter to ROI ----
-    row_start, row_end, col_start, col_end = roi_pixels
+    row_start, row_end, col_start, col_end = roi_pixels # unpack ROI bounds in full DEM pixel space
 
+    # Check which crater centres fall inside the ROI bounds (in pixel space)
     inside_roi = (
         (pixel_rows >= row_start)
         & (pixel_rows < row_end)
@@ -171,54 +173,64 @@ def build_crater_mask_from_catalogue(
         & (pixel_cols < col_end)
     )
 
-    crater_df_roi = crater_df.loc[inside_roi].copy()
-    pixel_rows_roi = pixel_rows[inside_roi]
-    pixel_cols_roi = pixel_cols[inside_roi]
+    crater_df_roi = crater_df.loc[inside_roi].copy() # keep only craters with centres inside ROI
+    pixel_rows_roi = pixel_rows[inside_roi] # pixel rows of craters with centres inside ROI
+    pixel_cols_roi = pixel_cols[inside_roi] # pixel cols of craters with centres inside ROI
 
     # ---- Size filters (meters), then convert to pixels ----
     diameter_km = crater_df_roi[config.diameter_km_column].to_numpy(dtype=float)
-    diameter_m = diameter_km * 1000.0
+    diameter_m = diameter_km * 1000.0 # convert km to m
 
+    # Apply size filters in meters (independent of pixel size)
     valid = diameter_m >= float(config.min_diameter_m)
     if config.max_diameter_m is not None:
         valid &= diameter_m <= float(config.max_diameter_m)
 
+    # Keep only valid craters after size filtering
     diameter_m = diameter_m[valid]
     pixel_rows_roi = pixel_rows_roi[valid]
     pixel_cols_roi = pixel_cols_roi[valid]
 
-    diameter_px = diameter_m / float(config.pixel_size_m)
+    diameter_px = diameter_m / float(config.pixel_size_m) # convert diameter from meters to pixels using config pixel size
 
     # ---- Build ROI-local mask ----
     roi_height = row_end - row_start
     roi_width = col_end - col_start
 
-    crater_mask = np.zeros((roi_height, roi_width), dtype=np.uint8)
+    crater_mask = np.zeros((roi_height, roi_width), dtype=np.uint8) # binary mask for craters in ROI (0=no crater, 1=crater)
 
-    crater_count = 0
+    crater_count = 0 # count of craters rasterised into the mask
 
+    # Rasterise each crater as a filled circle in ROI-local pixel space
+    
     for full_row, full_col, d_px in zip(pixel_rows_roi, pixel_cols_roi, diameter_px):
+
+        # Convert from full DEM pixel space to ROI-local pixel space by subtracting the ROI start indices
         local_row = int(full_row - row_start)
         local_col = int(full_col - col_start)
-        radius_px = int(max(1, round(float(d_px) / 2.0)))
+        radius_px = int(max(1, round(float(d_px) / 2.0))) # radius in pixels, at least 1 pixel to ensure visibility of small craters
 
+        # Check if the crater centre is within the ROI bounds in local pixel space before rasterising
         if 0 <= local_row < roi_height and 0 <= local_col < roi_width:
             rasterise_filled_circle(crater_mask, local_row, local_col, radius_px)
             crater_count += 1
 
     metadata = {
+        
         "roi_pixels": {
+            # Store ROI bounds in full DEM pixel space for traceability
             "row_start": int(row_start),
             "row_end": int(row_end),
             "col_start": int(col_start),
             "col_end": int(col_end),
         },
-        "roi_shape": {"height": int(roi_height), "width": int(roi_width)},
-        "pixel_size_m": float(config.pixel_size_m),
-        "catalogue_total_rows": int(len(crater_df)),
-        "craters_centres_in_roi": int(inside_roi.sum()),
-        "craters_rasterised": int(crater_count),
+        "roi_shape": {"height": int(roi_height), "width": int(roi_width)}, # Store ROI shape for traceability
+        "pixel_size_m": float(config.pixel_size_m), # Store pixel size for traceability
+        "catalogue_total_rows": int(len(crater_df)), # Total rows in original catalogue (before filtering)
+        "craters_centres_in_roi": int(inside_roi.sum()), # Number of craters with centres inside ROI (before size filtering)
+        "craters_rasterised": int(crater_count), # Number of craters actually rasterised into the mask (after all filtering)
         "config": {
+            # Store config parameters for traceability
             "min_diameter_m": float(config.min_diameter_m),
             "max_diameter_m": None if config.max_diameter_m is None else float(config.max_diameter_m),
             "latitude_column": config.latitude_column,
@@ -227,4 +239,5 @@ def build_crater_mask_from_catalogue(
         },
     }
 
+    
     return {"crater_mask": crater_mask, "metadata": metadata}
