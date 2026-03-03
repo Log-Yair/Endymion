@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 from typing import Dict, Tuple, Optional
 
@@ -228,4 +229,62 @@ def build_crater_mask_from_catalogue(
     roi_width = col_end - col_start # number of columns in the ROI grid 
 
     crater_mask = np.zeros((roi_height, roi_width), dtype=np.uint8) # initialize binary mask for the ROI grid
-    
+    crater_count = 0 # initialize crater count
+
+    for full_row, full_col, diameter in zip(pixel_rows_roi, pixel_cols_roi, diameter_px):
+        local_row = full_row - row_start # convert to ROI-local row index
+        local_col = full_col - col_start # convert to ROI-local column index
+        radius_px = int(max(1, round(diameter / 2))) # calculate radius in pixels, ensuring at least 1 pixel radius for very small craters
+
+        if 0 <= local_row < roi_height and 0 <= local_col < roi_width:
+            rasterise_filled_circle(crater_mask, local_row, local_col, radius_px) # rasterise crater circle into the mask
+            crater_count += 1 # increment crater count
+
+
+    # ------------------------------------------------------------------------
+    # getting the metadata for the crater mask
+    # ------------------------------------------------------------------------  
+
+    metadata = {
+    "roi_pixel_bounds": {
+        # Note: these are the pixel bounds of the ROI in the full DEM grid, not the local ROI grid
+        "row_start": row_start,
+
+        "row_end": row_end,
+
+        "col_start": col_start,
+
+        "col_end": col_end
+    },
+
+    "roi_shape": {
+        # These are the dimensions of the ROI grid (height and width in pixels)
+
+        "height": roi_height,
+
+        "width": roi_width
+    },
+    # The pixel resolution of the DEM, which is used to convert crater diameters from meters to pixels for rasterisation
+    "pixel_size_m": config.pixel_resolution_m,
+    # The number of craters that were rasterised into the mask (i.e. the number of craters whose centers fell within the ROI and passed the size filters)
+    "crater_count": crater_count,
+    # The total number of craters in the original catalogue (before filtering to ROI and size limits)
+    "catalogue_total_rows": int(len(crater_df)),
+    # The number of craters that had their centers within the ROI bounds (before applying size filters)
+    "craters_in_roi": int(len(crater_df_roi)),
+    # The number of craters that were actually rasterised into the mask (after applying size filters)
+    "craters_rasterised": crater_count,
+
+    "config": { 
+        "min_diameter_m": config.minimum_diameter_m,
+
+        "max_diameter_m": config.maximum_diameter_m,
+
+        "latitude_column": config.latitude_column,
+
+        "longitude_column": config.longitude_column,
+
+        "diameter_km_column": config.diameter_km_column
+    },
+
+    }
