@@ -278,7 +278,7 @@ def build_crater_mask_from_catalogue(
 
     # The number of craters that were actually rasterised into the mask (after applying size filters)
     "craters_rasterised": crater_count,
-    
+
     # The configuration parameters used for rasterisation, which is important for reproducibility and understanding the context of the crater mask (e.g. what size limits were applied, which columns were used for lat/lon/diameter)
     "config": { 
         "min_diameter_m": config.minimum_diameter_m,
@@ -292,4 +292,8 @@ def build_crater_mask_from_catalogue(
         "diameter_km_column": config.diameter_km_column
     },
 
+    }
+    return {
+        "crater_mask": crater_mask, # the binary crater mask array (2D numpy array where 1 indicates crater pixels and 0 indicates non-crater pixels)
+        "metadata": metadata # the metadata dictionary containing information about the ROI, rasterisation parameters, and crater counts
     }
