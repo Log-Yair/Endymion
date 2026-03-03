@@ -1,28 +1,27 @@
 # ============================================================================
-# Crater Catalogue → ROI-Aligned Raster
+# Crater Catalogue ->  ROI-Aligned Raster
 # ============================================================================
-#
-# Purpose:
-#   Convert Robbins crater catalogue (lat, lon, diameter)
-#   into a binary crater mask aligned with the DEM ROI grid.
-#
-# Design Principles:
-#   - ROI is defined in pixel space (row_start, row_end, col_start, col_end).
-#   - All outputs must match DEM grid dimensions exactly.
-#   - Projection handled via Rasterio (no manual stereographic math).
-#
-# Projection Pipeline:
-#   WGS84 (EPSG:4326) → DEM native CRS (polar stereographic)
-#   → Projected coordinates (x,y)
-#   → Pixel indices via dataset.index(x, y)
-#
-# Output:
-#   crater_mask.npy  (uint8, 0/1)
-#   crater_meta.json
-#
-# ============================================================================
+""" 
+Purpose:
+  Convert Robbins crater catalogue (lat, lon, diameter)
+  into a binary crater mask aligned with the DEM ROI grid.
 
+Design Principles:
+  - ROI is defined in pixel space (row_start, row_end, col_start, col_end).
+  - All outputs must match DEM grid dimensions exactly.
+  - Projection handled via Rasterio (no manual stereographic math).
 
+Projection Pipeline:
+  WGS84 (EPSG:4326) ->  DEM native CRS (polar stereographic)
+  - >  Projected coordinates (x,y)
+  → Pixel indices via dataset.index(x, y)
+
+Output:
+  crater_mask.npy  (uint8, 0/1)
+  crater_meta.json
+"""
+
+# imports 
 from __future__ import annotations
 
 from dataclasses import dataclass
