@@ -206,15 +206,26 @@ def build_crater_mask_from_catalogue(
     # Convert crater diameter (km) → pixel radius
     # ------------------------------------------------------------------------
 
-    diameter_km = crater_df_roi[config.diameter_km_column].to_numpy(dtype=float)
+    diameter_km = crater_df_roi[config.diameter_km_column].to_numpy(dtype=float) # extract diameter column as numpy array of floats
 
-    diameter_px = (diameter_km * 1000.0) / config.pixel_resolution_m
+    diameter_px = (diameter_km * 1000.0) / config.pixel_resolution_m # convert diameter from kilometers to meters, then divide by pixel size to get diameter in pixels
 
     # Apply size filters
-    valid = diameter_px >= config.minimum_diameter_px
+    valid = diameter_px >= config.minimum_diameter_px # filter out craters smaller than minimum diameter
     if config.maximum_diameter_px is not None:
-        valid &= diameter_px <= config.maximum_diameter_px
+        valid &= diameter_px <= config.maximum_diameter_px      # filter out craters larger than maximum diameter (if specified)
 
-    diameter_px = diameter_px[valid]
-    pixel_rows_roi = pixel_rows_roi[valid]
-    pixel_cols_roi = pixel_cols_roi[valid]
+    diameter_px = diameter_px[valid] # filter diameter array to only include valid craters
+    pixel_rows_roi = pixel_rows_roi[valid] # filter pixel row indices to only include valid craters
+    pixel_cols_roi = pixel_cols_roi[valid] # filter pixel column indices to only include valid craters
+
+    # ------------------------------------------------------------------------
+    # create a ROI locla mask
+    # ------------------------------------------------------------------------
+
+    # dimensions of the ROI grid
+    roi_height = row_end - row_start # number of rows in the ROI grid
+    roi_width = col_end - col_start # number of columns in the ROI grid 
+
+    crater_mask = np.zeros((roi_height, roi_width), dtype=np.uint8) # initialize binary mask for the ROI grid
+    
