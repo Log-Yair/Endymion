@@ -266,15 +266,20 @@ def build_crater_mask_from_catalogue(
     },
     # The pixel resolution of the DEM, which is used to convert crater diameters from meters to pixels for rasterisation
     "pixel_size_m": config.pixel_resolution_m,
+
     # The number of craters that were rasterised into the mask (i.e. the number of craters whose centers fell within the ROI and passed the size filters)
     "crater_count": crater_count,
+
     # The total number of craters in the original catalogue (before filtering to ROI and size limits)
     "catalogue_total_rows": int(len(crater_df)),
+
     # The number of craters that had their centers within the ROI bounds (before applying size filters)
     "craters_in_roi": int(len(crater_df_roi)),
+
     # The number of craters that were actually rasterised into the mask (after applying size filters)
     "craters_rasterised": crater_count,
-
+    
+    # The configuration parameters used for rasterisation, which is important for reproducibility and understanding the context of the crater mask (e.g. what size limits were applied, which columns were used for lat/lon/diameter)
     "config": { 
         "min_diameter_m": config.minimum_diameter_m,
 
