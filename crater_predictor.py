@@ -121,5 +121,8 @@ class CraterPredictor:
                 "Crater mask not found in derived cache. Provide dem_img_path and robbins_csv_path to build it "
                 "(or set rebuild_if_missing=False and precompute it)."
             )
+        
+        # import lazily so that i don't have to install rasterio for Phase-1
+        from crater_raster import build_crater_mask_from_catalogue, CraterRasterConfig
 
 
