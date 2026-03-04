@@ -93,3 +93,12 @@ class CraterPredictor:
         mask_path = derived_dir / f"{self.cache_product_name}.npy"      # e.g. crater_mask.npy
         meta_path = derived_dir / f"{self.cache_product_name}_meta.json" # e.g. crater_mask_meta.json
         
+        # If the cache exists load it
+
+        if mask_path.exists() and meta_path.exists() and not rebuild_if_missing:
+            crater_mask = np.load(mask_path)
+            if crater_mask.shape != ref.shape:
+                raise ValueError(
+                    f"Cached crater mask shape {crater_mask.shape} does not match expected {ref.shape}. "
+                    f"(tile_id={tile_id}, roi={roi})"
+                )
