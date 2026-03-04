@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from curses import meta
 from dataclasses import dataclass
+from logging import config
 from pathlib import Path
 from typing import Any, Dict, Optional
 import json
@@ -124,5 +125,20 @@ class CraterPredictor:
         
         # import lazily so that i don't have to install rasterio for Phase-1
         from crater_raster import build_crater_mask_from_catalogue, CraterRasterConfig
+
+        cfg = raster_config if raster_config is not None else CraterRasterConfig() # use provided config or default config
+
+        # build the crater mask from the catalogue (this will also handle coordinate transforms and rasterisation)
+        
+        out = build_crater_mask_from_catalogue(
+            robbins_csv_paths=robbins_csv_path,
+            dem_img_path=dem_img_path,
+            roi=roi,
+            config=cfg,
+        )
+
+    # Extract outputs
+    crater_mask = out["crater_mask"] # binary mask of shape (rows, cols) where 1 indicates crater presence according to the catalogue
+    crater_meta = out["metadata"] # e.g. number of craters rasterised, any warnings about craters outside the ROI, etc.
 
 
