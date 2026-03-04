@@ -16,7 +16,7 @@ What this module does (now):
      and returns it as a "crater_proba" map (0/1).
 
 Why this is useful: 
-It lets you integrate craters into the pipeline *today* (Phase-2 Step 1), without
+It lets me integrate craters into the pipeline *today* without
 changing HazardAssessor yet.
 
 Later (Phase-2 ML):
