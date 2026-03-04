@@ -25,6 +25,7 @@ Replace catalogue_raster_v1 with a real model inference that outputs probabiliti
 
 from __future__ import annotations
 
+from curses import meta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -102,3 +103,23 @@ class CraterPredictor:
                     f"Cached crater mask shape {crater_mask.shape} does not match expected {ref.shape}. "
                     f"(tile_id={tile_id}, roi={roi})"
                 )
+            
+            meta = json.loads(meta_path.read_text())
+
+            return {
+                "crater_proba": crater_mask.astype(np.float32), # return as float32 for pipeline consistency, even though it's binary
+                "meta": {
+                    "model_id": self.model_id,
+                    "source": "derived_cache",
+                    "product": str(mask_path.name),
+                    "catalogue": meta,  
+                },
+            }
+        # If not, build it from the catalogue
+        if dem_img_path is None or robbins_csv_path is None:
+            raise ValueError(
+                "Crater mask not found in derived cache. Provide dem_img_path and robbins_csv_path to build it "
+                "(or set rebuild_if_missing=False and precompute it)."
+            )
+
+
