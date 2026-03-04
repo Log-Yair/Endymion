@@ -147,5 +147,32 @@ class CraterPredictor:
                 f"Built crater mask shape {crater_mask.shape} does not match expected {ref.shape}. "
                 "This usually means your ROI / DEM file does not match the features grid."
             )
+        
+        # Save into derived cache (keeps HazardAssessor untouched)
+        np.save(mask_path, crater_mask.astype(np.uint8, copy=False))
+        meta_path.write_text(json.dumps(crater_meta, indent=2))
+
+        return {
+            "crater_proba": crater_mask.astype(np.float32, copy=False),
+            "meta": {
+                "model_id": self.model_id,
+                "source": "built_from_catalogue",
+                "product": str(mask_path.name),
+                "saved_to": str(derived_dir),
+                "catalogue": crater_meta,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_reference_raster(features: Dict[str, np.ndarray]) -> np.ndarray:
+        """Pick a 2D raster from features to define output shape."""
+        for key, v in features.items():
+            if isinstance(v, np.ndarray) and v.ndim == 2:
+                return v
+        raise ValueError("No 2D feature rasters provided to CraterPredictor.")
 
 
