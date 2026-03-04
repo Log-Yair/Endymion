@@ -73,3 +73,23 @@ class CraterPredictor:
             proba = np.zeros(ref.shape, dtype=np.float32) # return all zeros for stub mode
             return {"crater_proba": proba,
                     "meta":{"model_id": self.model_id, "note": "Phase-1 stub: returns all zeros"}} # include model_id in metadata for traceability
+        if self.model_id != "catalogue_raster_v1":
+            raise ValueError(f"Unknown model_id: {self.model_id}")
+        
+        # ----------------------------------------------------------------------
+        # Catalogue raster mode:
+        # ----------------------------------------------------------------------
+
+        if dh is None or tile_id is None or roi is None:
+            raise ValueError("catalogue_raster_v1 mode requires dh, tile_id, and roi for caching")
+        
+        # cache handling: check if we already have a rasterised crater mask for this tile and ROI in the derived directory
+
+        derived_dir = Path(dh.derived_dir(tile_id, roi)) # get the derived directory for this tile and ROI
+        derived_dir.mkdir(parents=True, exist_ok=True) # ensure it exists
+
+        # Check if cached mask exists
+
+        mask_path = derived_dir / f"{self.cache_product_name}.npy"      # e.g. crater_mask.npy
+        meta_path = derived_dir / f"{self.cache_product_name}_meta.json" # e.g. crater_mask_meta.json
+        
