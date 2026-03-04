@@ -138,7 +138,7 @@ class CraterPredictor:
         )
 
     # Extract outputs
-    crater_mask = out["crater_mask"] # binary mask of shape (rows, cols) where 1 indicates crater presence according to the catalogue
-    crater_meta = out["metadata"] # e.g. number of craters rasterised, any warnings about craters outside the ROI, etc.
+        crater_mask = out["crater_mask"] # binary mask of shape (rows, cols) where 1 indicates crater presence according to the catalogue
+        crater_meta = out["metadata"] # e.g. number of craters rasterised, any warnings about craters outside the ROI, etc.
 
 
