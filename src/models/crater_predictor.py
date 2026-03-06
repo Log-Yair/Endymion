@@ -26,7 +26,6 @@ Replace catalogue_raster_v1 with a real model inference that outputs probabiliti
 from __future__ import annotations
 
 from dataclasses import dataclass
-from logging import config
 from pathlib import Path
 from typing import Any, Dict, Optional
 import json
@@ -124,13 +123,12 @@ class CraterPredictor:
                 "Crater mask not found in derived cache. Provide dem_img_path and robbins_csv_path to build it "
                 "(or set rebuild_if_missing=False and precompute it)."
             )
-        
-        # import lazily so that i don't have to install rasterio for Phase-1
+        # Use provided raster_config or default if not provided
         cfg = raster_config if raster_config is not None else CraterRasterConfig() # use provided config or default config
 
         # build the crater mask from the catalogue (this will also handle coordinate transforms and rasterisation)
         out = build_crater_mask_from_catalogue(
-            robbins_csv_paths=robbins_csv_path,
+            robbins_csv_path=robbins_csv_path,
             dem_img_path=dem_img_path,
             roi=roi,
             config=cfg,
