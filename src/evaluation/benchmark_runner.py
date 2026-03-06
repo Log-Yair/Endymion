@@ -14,10 +14,12 @@ from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
-from data_handler import DataHandler, ROI
-from hazard_assessor import HazardAssessor
-from pathfinder import Pathfinder, build_cost_from_hazard
-from evaluator import Evaluator
+# Refactored imports after repository structure cleanup
+
+from src.data.data_handler import DataHandler, ROI
+from src.models.hazard_assessor import HazardAssessor
+from src.planning.pathfinder import Pathfinder, build_cost_from_hazard
+from src.evaluation.evaluator import Evaluator
 
 RC = Tuple[int, int]
 

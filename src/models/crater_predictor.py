@@ -32,6 +32,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 import json
 
+# Refactored import after moving crater_raster into src/data
+
+from src.data.crater_raster import build_crater_mask_from_catalogue, CraterRasterConfig
 import numpy as np
 
 @dataclass
@@ -61,7 +64,7 @@ class CraterPredictor:
         dh: Any = None,  # DataHandler (kept as Any to avoid hard import cycles)
         dem_img_path: Optional[str | Path] = None, # for coordinate transforms in catalogue_raster mode
         robbins_csv_path: Optional[str | Path] = None, # path to Robbins crater catalogue CSV for catalogue_raster mode
-        raster_config: Optional[Any] = None,  # crater_raster.CraterRasterConfig
+        raster_config: Optional[CraterRasterConfig] = None,  # crater_raster.CraterRasterConfig
         rebuild_if_missing: bool = False, # if True, will build the crater mask from catalogue if not found in cache (only for catalogue_raster mode)
     ) -> Dict[str, np.ndarray]:
         """
@@ -124,8 +127,6 @@ class CraterPredictor:
             )
         
         # import lazily so that i don't have to install rasterio for Phase-1
-        from crater_raster import build_crater_mask_from_catalogue, CraterRasterConfig
-
         cfg = raster_config if raster_config is not None else CraterRasterConfig() # use provided config or default config
 
         # build the crater mask from the catalogue (this will also handle coordinate transforms and rasterisation)
