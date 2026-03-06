@@ -68,7 +68,7 @@ class CraterPredictor:
         Outputs is alawys "crater_proba" for pipeline consistency, even if it's binary in catalogue_raster mode.
         """
         # pick any raster as shape reference
-        ref = self.get_reference_raster(features) # helper function to find a 2D raster in features to use as shape reference for the output probability map
+        ref = self._get_reference_raster(features) # helper function to find a 2D raster in features to use as shape reference for the output probability map
 
         if self.model_id == "stub_v1":
 
