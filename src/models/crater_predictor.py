@@ -25,7 +25,6 @@ Replace catalogue_raster_v1 with a real model inference that outputs probabiliti
 
 from __future__ import annotations
 
-from curses import meta
 from dataclasses import dataclass
 from logging import config
 from pathlib import Path
