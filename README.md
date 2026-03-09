@@ -55,7 +55,7 @@ notebooks/Endymion_Prototype_Phase1_Demo.ipynb
 
 ---
 
-## Author
+## Author - Yair Cortes
 
-Final Year Project – Computer Science  
+Final Year Project   
 Lunar Navigation and Hazard Mapping System
