@@ -35,9 +35,9 @@ from typing import Dict, Tuple, Optional, Any
 
 import numpy as np
 import pandas as pd
-import rasterio
-from rasterio.warp import transform
-from scipy.ndimage import distance_transform_edt
+import rasterio # for reading DEM and coordinate reprojection
+from rasterio.warp import transform # for coordinate reprojection
+from scipy.ndimage import distance_transform_edt # for computing distance to nearest crater cell
 
 
 # ----------------------------------------------------------------------------
