@@ -152,31 +152,38 @@ class CraterPredictor:
         )
 
     # Extract outputs
-    
+
         crater_mask = out["crater_mask"] # binary mask of shape (rows, cols) where 1 indicates crater presence according to the catalogue
         crater_meta = out["metadata"] # e.g. number of craters rasterised, any warnings about craters outside the ROI, etc.
         crater_distance_m = out["crater_distance_m"] # raster of same shape where each pixel value is the distance in meters to the nearest crater rim
         crater_density = out["crater_density"] # raster of same shape where each pixel value
 
-        # sanity check the output shape matches our reference raster
+        # is the local crater density (e.g. number of craters per square km) calculated using a kernel density estimation approach
+        self._validate_cached_shape("crater_mask", crater_mask, ref.shape, tile_id, roi_pixels)
+        # validate shapes before saving to cache, to catch any issues early and avoid caching invalid products
+        self._validate_cached_shape("crater_distance_m", crater_distance_m, ref.shape, tile_id, roi_pixels)
+        # validate_shapes(crater_density, ref.shape)
+        self._validate_cached_shape("crater_density", crater_density, ref.shape, tile_id, roi_pixels)
 
-        if crater_mask.shape != ref.shape:
-            raise ValueError(
-                f"Built crater mask shape {crater_mask.shape} does not match expected {ref.shape}. "
-                "This usually means your ROI / DEM file does not match the features grid."
-            )
-        
-        # Save into derived cache (keeps HazardAssessor untouched)
-        np.save(mask_path, crater_mask.astype(np.uint8, copy=False))
-        meta_path.write_text(json.dumps(crater_meta, indent=2))
+        np.save(mask_path, crater_mask.astype(np.uint8, copy=False)) # save binary mask as uint8 to save space (0 and 1 values only)
+        np.save(distance_path, crater_distance_m.astype(np.float32, copy=False)) # save distance raster as float32
+        np.save(density_path, crater_density.astype(np.float32, copy=False)) # save density raster as float32
+        meta_path.write_text(json.dumps(crater_meta, indent=2)) # save metadata as JSON for human readability
 
         return {
-            "crater_proba": crater_mask.astype(np.float32, copy=False),
+            "crater_proba": crater_mask.astype(np.float32, copy=False), # save as float32 for probability values
+            "crater_mask": crater_mask.astype(np.uint8, copy=False),
+            "crater_distance_m": crater_distance_m.astype(np.float32, copy=False),
+            "crater_density": crater_density.astype(np.float32, copy=False),
             "meta": {
                 "model_id": self.model_id,
                 "source": "built_from_catalogue",
-                "product": str(mask_path.name),
                 "saved_to": str(derived_dir),
+                "products": {
+                    "crater_mask": str(mask_path.name),
+                    "crater_distance_m": str(distance_path.name),
+                    "crater_density": str(density_path.name),
+                },
                 "catalogue": crater_meta,
             },
         }
@@ -187,10 +194,24 @@ class CraterPredictor:
 
     @staticmethod
     def _get_reference_raster(features: Dict[str, np.ndarray]) -> np.ndarray:
-        """Pick a 2D raster from features to define output shape."""
-        for key, v in features.items():
-            if isinstance(v, np.ndarray) and v.ndim == 2:
-                return v
+        """
+        Pick any 2D feature raster to define the expected output shape.
+        """
+        for _, value in features.items():
+            if isinstance(value, np.ndarray) and value.ndim == 2:
+                return value
         raise ValueError("No 2D feature rasters provided to CraterPredictor.")
 
-
+    @staticmethod
+    def _validate_cached_shape(
+        product_name: str,
+        arr: np.ndarray,
+        expected_shape: tuple[int, int],
+        tile_id: str,
+        roi_pixels: tuple[int, int, int, int],
+    ) -> None:
+        if arr.shape != expected_shape:
+            raise ValueError(
+                f"Cached/built {product_name} shape {arr.shape} does not match expected "
+                f"{expected_shape} (tile_id={tile_id}, roi_pixels={roi_pixels})."
+            )                                                                   
