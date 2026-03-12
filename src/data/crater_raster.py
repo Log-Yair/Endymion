@@ -29,6 +29,7 @@ Requirements
 
 from __future__ import annotations
 
+from curses import window
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Tuple, Optional
@@ -37,6 +38,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.warp import transform
+from scipy.ndimage import distance_transform_edt
 
 
 # ----------------------------------------------------------------------------
@@ -53,31 +55,34 @@ PixelROI = Tuple[int, int, int, int]
 
 @dataclass
 class CraterRasterConfig:
-    """Configuration parameters for rasterising a crater catalogue."""
-
-    # DEM resolution in meters per pixel (must match your ROI DEM resolution)
+    """
+    Configuration for rasterising crater catalogue data into ROI-aligned products.
+    """
     pixel_size_m: float = 20.0
 
-    # Size filters expressed in meters (easy to explain + independent of pixel size).
-    # Default min is 2 pixels at 20 m/px.
+    # Size filters in meters
     min_diameter_m: float = 40.0
     max_diameter_m: Optional[float] = None
+
+    # Density window (odd integer, in pixels)
+    density_window_px: int = 21
+
+    # Optional clip for distance map (helps avoid huge values dominating stats)
+    max_distance_m: Optional[float] = 1000.0
 
     # CSV column names (Robbins)
     latitude_column: str = "LAT_CIRC_IMG"
     longitude_column: str = "LON_CIRC_IMG"
     diameter_km_column: str = "DIAM_CIRC_IMG"
 
-
 # ----------------------------------------------------------------------------
-# Geometry helper
+# Geometry helpers
 # ----------------------------------------------------------------------------
 
 def rasterise_filled_circle(mask: np.ndarray, center_row: int, center_col: int, radius_px: int) -> None:
-    """Rasterise a filled circle into a binary mask (in-place).
+    """
+    Rasterise a filled circle into a binary mask (in-place).
 
-    Notes
-    -----
     - Uses a bounding box so we don't scan the full ROI grid.
     - Distance check enforces a circular footprint.
     """
@@ -94,6 +99,57 @@ def rasterise_filled_circle(mask: np.ndarray, center_row: int, center_col: int, 
         for c in range(col_min, col_max):
             if (r - center_row) ** 2 + (c - center_col) ** 2 <= radius_px ** 2:
                 mask[r, c] = 1
+
+
+# 
+def _validate_density_window_size(window: int) -> None:
+    if window < 3 or window % 2 == 0:
+        raise ValueError(f"Density window size must be an odd integer >= 3")
+    return int(window)
+
+# 
+def _compute_local_density(binary_mask: np.ndarray, window: int) -> np.ndarray:
+    """
+    Local crater density as moving-window mean of the binary crater mask.
+    Output range is [0, 1].
+    """
+    window = _validate_density_window_size(window)
+
+    mask = binary_mask.astype(np.float32, copy=False) # ensure float32 for cumulative sums, but avoid unnecessary copy if already float32
+    r = window // 2
+
+    padded = np.pad(mask, r, mode="constant", constant_values=0.0) # pad with zeros so that the moving window can be applied at the borders without issues
+
+    # Integral image with leading zero row/col
+    S = np.pad(
+        padded.cumsum(axis=0).cumsum(axis=1),
+        ((1, 0), (1, 0)),
+        mode="constant",
+        constant_values=0.0,
+    )
+
+    H,W = mask.shape # original mask shape (not padded)
+    y0 = np.arange(H) # row indices of top-left corner of window
+    x0 = np.arange(W) # col indices of top-left corner of window
+    Y0, X0 = np.meshgrid(y0, x0, indexing="ij") # shape (H, W), each element is the row/col index of the top-left corner of the window for that pixel
+
+    y0s = Y0 # row index of top-left corner of window
+    x0s = X0 # col index of top-left corner of window
+    y1s = Y0 + window # row index of bottom-right corner of window
+    x1s = X0 + window # col index of bottom-right corner of window
+
+    sum_values = S[y1s, x1s] - S[y0s, x1s] - S[y1s, x0s] + S[y0s, x0s] # shape (H, W), sum of values in the window for each pixel
+    density = sum_values / float(window * window) # local density is mean value in the window, range [0, 1]
+
+    return density.astype(np.float32)
+
+
+
+
+
+
+
+
 
 
 # ----------------------------------------------------------------------------
