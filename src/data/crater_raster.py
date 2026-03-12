@@ -29,10 +29,9 @@ Requirements
 
 from __future__ import annotations
 
-from curses import window
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 
 import numpy as np
 import pandas as pd

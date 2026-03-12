@@ -1,27 +1,14 @@
-# References / og notes:
-# - Phase-1 version was a stub that returned all zeros.
-# - Phase-2 adds an *optional* catalogue-backed mode that rasterises Robbins craters into an ROI-aligned mask using Rasterio.
-# - Coordinate transform: WGS84 (EPSG:4326) -> DEM native CRS; pixel index via ds.index(x, y).
-
-"""
-CraterPredictor for Endymion.
-
-What this module does (now):
-
-- Keeps the pipeline modular (CraterPredictor exists even before ML).
-- Supports TWO modes:
-
-  1) "stub_v1" (default): returns all zeros (Phase-1 compatible)
-  2) "catalogue_raster_v1": builds/loads a crater *binary mask* from the Robbins catalogue
-     and returns it as a "crater_proba" map (0/1).
-
-Why this is useful: 
-It lets me integrate craters into the pipeline *today* without
-changing HazardAssessor yet.
-
-Later (Phase-2 ML):
-Replace catalogue_raster_v1 with a real model inference that outputs probabilities.
-"""
+# References / notes:
+#     * crater_raster.py = build raster products from catalogue
+#     * crater_predictor.py = load/cache/expose pipeline outputs
+# - This version still supports:
+#     1) stub_v1
+#     2) catalogue_raster_v1
+# - New outputs exposed:
+#     * crater_mask
+#     * crater_distance_m
+#     * crater_density
+#     * crater_proba  (kept for future ML compatibility)
 
 from __future__ import annotations
 
