@@ -13,14 +13,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 from pathlib import Path
+from turtle import distance
 from typing import Any, Dict, Optional
 import json
 
-# Refactored import after moving crater_raster into src/data
-
-from src.data.crater_raster import build_crater_mask_from_catalogue, CraterRasterConfig
 import numpy as np
+
+from src.data.crater_raster import (
+    CraterRasterConfig,
+    build_crater_products_from_catalogue,
+)
+
 
 @dataclass
 class CraterPredictor:
@@ -56,24 +61,30 @@ class CraterPredictor:
         Outputs is alawys "crater_proba" for pipeline consistency, even if it's binary in catalogue_raster mode.
         """
         # pick any raster as shape reference
-        ref = self._get_reference_raster(features) # helper function to find a 2D raster in features to use as shape reference for the output probability map
+        ref = self._get_reference_raster(features)
 
         if self.model_id == "stub_v1":
+            zeros = np.zeros(ref.shape, dtype=np.float32)
 
-            proba = np.zeros(ref.shape, dtype=np.float32) # return all zeros for stub mode
-            return {"crater_proba": proba,
-                    "meta":{"model_id": self.model_id, "note": "Phase-1 stub: returns all zeros"}} # include model_id in metadata for traceability
+            return {
+                "crater_proba": zeros,
+                "crater_mask": np.zeros(ref.shape, dtype=np.uint8),
+                "crater_distance_m": zeros.copy(),
+                "crater_density": zeros.copy(),
+                "meta": {
+                    "model_id": self.model_id,
+                    "note": "Phase-1 stub: returns zero crater outputs.",
+                },
+            }
+
         if self.model_id != "catalogue_raster_v1":
             raise ValueError(f"Unknown model_id: {self.model_id}")
-        
-        # ----------------------------------------------------------------------
-        # Catalogue raster mode:
-        # ----------------------------------------------------------------------
 
         if dh is None or tile_id is None or roi_pixels is None:
-            raise ValueError("catalogue_raster_v1 mode requires dh, tile_id, and roi_pixels for caching")
+            raise ValueError(
+                "catalogue_raster_v1 requires dh, tile_id, and roi_pixels for cache handling."
+            )
         
-        # cache handling: check if we already have a rasterised crater mask for this tile and ROI in the derived directory
 
         derived_dir = Path(dh.derived_dir(tile_id, roi_pixels)) # get the derived directory for this tile and ROI
         derived_dir.mkdir(parents=True, exist_ok=True) # ensure it exists
@@ -81,9 +92,19 @@ class CraterPredictor:
         # Check if cached mask exists
 
         mask_path = derived_dir / f"{self.cache_product_name}.npy"      # e.g. crater_mask.npy
+        distance_path = derived_dir / f"{self.cache_product_name}_distance.npy" # e.g. crater_mask_distance.npy
+        density_path = derived_dir / f"{self.cache_product_name}_density.npy" # e.g. crater_mask_density.npy
         meta_path = derived_dir / f"{self.cache_product_name}_meta.json" # e.g. crater_mask_meta.json
         
         # If the cache exists load it
+
+        cache_exists = (
+            mask_path.exists()
+            and distance_path.exists()
+            and density_path.exists()
+            and meta_path.exists()
+            
+            )
 
         if mask_path.exists() and meta_path.exists() and not rebuild_if_missing:
             crater_mask = np.load(mask_path)
