@@ -25,6 +25,7 @@ Outputs
 Requirements
 ------------
   pip install rasterio numpy pandas
+  scipy is also required for distance transform.
 """
 
 from __future__ import annotations
