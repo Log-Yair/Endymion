@@ -319,6 +319,7 @@ def build_crater_mask_from_catalogue(
             "col_start": int(col_start),
             "col_end": int(col_end),
         },
+
         "roi_shape": {"height": int(roi_height), "width": int(roi_width)}, # Store ROI shape for traceability
         "pixel_size_m": float(config.pixel_size_m), # Store pixel size for traceability
         "catalogue_total_rows": int(len(crater_df)), # Total rows in original catalogue (before filtering)
@@ -330,6 +331,7 @@ def build_crater_mask_from_catalogue(
             "crater_density",
         ],
 
+        # Statistics about the crater distribution in the ROI for traceability and potential filtering in downstream modules
         "stats": {
             "mask_coverage_ratio": float(crater_mask.mean()),
             "distance_min_m": float(np.min(crater_distance_m)),
@@ -340,20 +342,23 @@ def build_crater_mask_from_catalogue(
             "density_mean": float(np.mean(crater_density)),
         },
         
-        
+        # Store config parameters for traceability
         "config": {
-            # Store config parameters for traceability
             "min_diameter_m": float(config.min_diameter_m),
             "max_diameter_m": None if config.max_diameter_m is None else float(config.max_diameter_m),
+            "density_window_px": int(config.density_window_px),
+            "max_distance_m": None if config.max_distance_m is None else float(config.max_distance_m),
             "latitude_column": config.latitude_column,
             "longitude_column": config.longitude_column,
             "diameter_km_column": config.diameter_km_column,
-            "density_window_px": int(config.density_window_px),
-            "max_distance_m": None if config.max_distance_m is None else float(config.max_distance_m),
         },
-
 
     }
 
     
-    return {"crater_mask": crater_mask, "crater_distance_m": crater_distance_m, "crater_density": crater_density, "metadata": metadata}
+    return {
+        "crater_mask": crater_mask,
+        "crater_distance_m": crater_distance_m,
+        "crater_density": crater_density, 
+        "metadata": metadata,
+    }
