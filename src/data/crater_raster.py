@@ -32,7 +32,7 @@ from __future__ import annotations
 from curses import window
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -361,4 +361,25 @@ def build_crater_mask_from_catalogue(
         "crater_distance_m": crater_distance_m,
         "crater_density": crater_density, 
         "metadata": metadata,
+    }
+
+"backwards compatibility wrapper for CraterPredictor"
+def build_crater_mask_from_catalogue(
+    *,
+    robbins_csv_path: str | Path,
+    dem_img_path: str | Path,
+    roi_pixels: PixelROI,
+    config: CraterRasterConfig = CraterRasterConfig(),
+
+) -> Dict[str, Any]:
+    
+    out = build_crater_mask_from_catalogue(
+        robbins_csv_path=robbins_csv_path,
+        dem_img_path=dem_img_path,
+        roi_pixels=roi_pixels,
+        config=config,
+    )
+    return {
+        "crater_proba": out["crater_mask"], # for pipeline consistency, even if it's binary in this mode
+        "meta": out["metadata"],
     }
