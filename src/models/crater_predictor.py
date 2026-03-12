@@ -58,7 +58,7 @@ class CraterPredictor:
         dem_m: Optional[np.ndarray] = None,
         *,
         tile_id: Optional[str] = None, # for traceability in metadata
-        roi: Optional[tuple[int, int, int, int]] = None, # (row_start, row_end, col_start, col_end) in pixel space
+        roi_pixels: Optional[tuple[int, int, int, int]] = None, # (row_start, row_end, col_start, col_end) in pixel space
         dh: Any = None,  # DataHandler (kept as Any to avoid hard import cycles)
         dem_img_path: Optional[str | Path] = None, # for coordinate transforms in catalogue_raster mode
         robbins_csv_path: Optional[str | Path] = None, # path to Robbins crater catalogue CSV for catalogue_raster mode
@@ -83,12 +83,12 @@ class CraterPredictor:
         # Catalogue raster mode:
         # ----------------------------------------------------------------------
 
-        if dh is None or tile_id is None or roi is None:
-            raise ValueError("catalogue_raster_v1 mode requires dh, tile_id, and roi for caching")
+        if dh is None or tile_id is None or roi_pixels is None:
+            raise ValueError("catalogue_raster_v1 mode requires dh, tile_id, and roi_pixels for caching")
         
         # cache handling: check if we already have a rasterised crater mask for this tile and ROI in the derived directory
 
-        derived_dir = Path(dh.derived_dir(tile_id, roi)) # get the derived directory for this tile and ROI
+        derived_dir = Path(dh.derived_dir(tile_id, roi_pixels)) # get the derived directory for this tile and ROI
         derived_dir.mkdir(parents=True, exist_ok=True) # ensure it exists
 
         # Check if cached mask exists
@@ -103,7 +103,7 @@ class CraterPredictor:
             if crater_mask.shape != ref.shape:
                 raise ValueError(
                     f"Cached crater mask shape {crater_mask.shape} does not match expected {ref.shape}. "
-                    f"(tile_id={tile_id}, roi={roi})"
+                    f"(tile_id={tile_id}, roi_pixels={roi_pixels})"
                 )
             
             meta = json.loads(meta_path.read_text())
@@ -130,7 +130,7 @@ class CraterPredictor:
         out = build_crater_mask_from_catalogue(
             robbins_csv_path=robbins_csv_path,
             dem_img_path=dem_img_path,
-            roi=roi,
+            roi_pixels=roi_pixels,
             config=cfg,
         )
 
