@@ -213,14 +213,14 @@ def build_crater_mask_from_catalogue(
         config.longitude_column,
         config.diameter_km_column,
     ]
-
+    # Validate that required columns are present in the CSV
     for col in required_columns:
         if col not in crater_df.columns:
             raise ValueError(f"Required column '{col}' not found in crater catalogue CSV.")
 
     crater_df = crater_df[required_columns].dropna().copy() # keep only needed columns and drop rows with missing values
 
-    # ---- Open DEM to obtain CRS + pixel transform ----
+    #  Open DEM to obtain CRS + pixel transform 
     with rasterio.open(dem_img_path) as ds:
         if ds.crs is None:
             raise ValueError("DEM image does not have a defined CRS.")
@@ -298,6 +298,18 @@ def build_crater_mask_from_catalogue(
             rasterise_filled_circle(crater_mask, local_row, local_col, radius_px)
             crater_count += 1
 
+    # Compute distance map to nearest crater cell in meters
+    crater_distance_m = _compute_distance_to_crater(
+        crater_mask, 
+        pixel_size_m=config.pixel_size_m,
+        max_distance_m=config.max_distance_m,
+    )
+    # Compute local crater density as moving-window mean of the binary crater mask
+    crater_density = _compute_local_density(
+        crater_mask,
+        window=config.density_window_px,
+    )                                                
+
     metadata = {
         
         "roi_pixels": {
@@ -312,6 +324,23 @@ def build_crater_mask_from_catalogue(
         "catalogue_total_rows": int(len(crater_df)), # Total rows in original catalogue (before filtering)
         "craters_centres_in_roi": int(inside_roi.sum()), # Number of craters with centres inside ROI (before size filtering)
         "craters_rasterised": int(crater_count), # Number of craters actually rasterised into the mask (after all filtering)
+        "products":[
+            "crater_mask",
+            "crater_distance_m",
+            "crater_density",
+        ],
+
+        "stats": {
+            "mask_coverage_ratio": float(crater_mask.mean()),
+            "distance_min_m": float(np.min(crater_distance_m)),
+            "distance_max_m": float(np.max(crater_distance_m)),
+            "distance_mean_m": float(np.mean(crater_distance_m)),
+            "density_min": float(np.min(crater_density)),
+            "density_max": float(np.max(crater_density)),
+            "density_mean": float(np.mean(crater_density)),
+        },
+        
+        
         "config": {
             # Store config parameters for traceability
             "min_diameter_m": float(config.min_diameter_m),
@@ -319,8 +348,12 @@ def build_crater_mask_from_catalogue(
             "latitude_column": config.latitude_column,
             "longitude_column": config.longitude_column,
             "diameter_km_column": config.diameter_km_column,
+            "density_window_px": int(config.density_window_px),
+            "max_distance_m": None if config.max_distance_m is None else float(config.max_distance_m),
         },
+
+
     }
 
     
-    return {"crater_mask": crater_mask, "metadata": metadata}
+    return {"crater_mask": crater_mask, "crater_distance_m": crater_distance_m, "crater_density": crater_density, "metadata": metadata}
