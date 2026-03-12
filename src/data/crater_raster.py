@@ -182,21 +182,29 @@ def build_crater_mask_from_catalogue(
     roi_pixels: PixelROI,
     config: CraterRasterConfig = CraterRasterConfig(),
 ) -> Dict[str, object]:
-    """Build an ROI-aligned crater mask from the Robbins crater catalogue.
-
-    Steps
-    -----
-    1) Load crater catalogue (lat/lon/diameter).
-    2) Reproject lat/lon (WGS84) -> DEM CRS.
-    3) Convert projected coords -> pixel indices.
-    4) Filter to craters whose *centres* fall inside ROI.
-    5) Rasterise each crater as a filled circle in ROI-local pixel space.
     """
+    Build ROI-aligned crater raster products from the Robbins crater catalogue.
 
+    Outputs:
+    - crater_mask        : uint8  (0/1)
+    - crater_distance_m  : float32
+    - crater_density     : float32 in [0,1]
+    - metadata           : dict
+    """
+    # Validate inputs
     robbins_csv_path = Path(robbins_csv_path) # ensure Path object for consistency
     dem_img_path = Path(dem_img_path)
 
-    # ---- Load catalogue ----
+    # Check input files exist before doing any processing
+
+    if not robbins_csv_path.exists():
+        raise FileNotFoundError(f"Robbins crater catalogue CSV not found: {robbins_csv_path}")
+    
+    if not dem_img_path.exists():
+        raise FileNotFoundError(f"DEM image not found: {dem_img_path}")
+    
+
+    #  Load catalogue 
     crater_df = pd.read_csv(robbins_csv_path) # problem here if file is missing or malformed
     
     # Check required columns exist
