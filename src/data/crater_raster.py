@@ -144,11 +144,30 @@ def _compute_local_density(binary_mask: np.ndarray, window: int) -> np.ndarray:
     return density.astype(np.float32)
 
 
+#
+def _compute_distance_to_crater(binary_mask: np.ndarray, pixel_size_m: float, max_distance_m: Optional[float]) -> np.ndarray:
+    """
+    Distance to nearest crater cell in meters.
 
+    Convention:
+    - crater cells have distance 0
+    - non-crater cells have Euclidean distance to nearest crater cell
+    """
+    if binary_mask.ndim != 2:
+        raise ValueError("binary_mask must be 2D.")
+    
+    if binary_mask.ndim != 2:
+        raise ValueError("binary_mask must be 2D.")
+    
+    # Compute distance transform (distance in pixels to nearest crater cell)
+    distance_px = distance_transform_edt(binary_mask == 0) # distance transform of the inverse mask gives distance to nearest crater cell
+    distance_m = distance_px.astype(np.float32) * float(pixel_size_m) # convert distance from pixels to meters
 
+    # Optionally clip distance to max_distance_m to avoid huge values dominating stats
+    if max_distance_m is not None:
+        distance_m = np.minimum(distance_m, float(max_distance_m).astype(np.float32))
 
-
-
+    return distance_m
 
 
 
