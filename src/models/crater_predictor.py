@@ -106,25 +106,34 @@ class CraterPredictor:
             
             )
 
-        if mask_path.exists() and meta_path.exists() and not rebuild_if_missing:
+        if cache_exists and not rebuild_if_missing:
             crater_mask = np.load(mask_path)
-            if crater_mask.shape != ref.shape:
-                raise ValueError(
-                    f"Cached crater mask shape {crater_mask.shape} does not match expected {ref.shape}. "
-                    f"(tile_id={tile_id}, roi_pixels={roi_pixels})"
-                )
-            
+            crater_distance_m = np.load(distance_path)
+            crater_density = np.load(density_path)
             meta = json.loads(meta_path.read_text())
 
+            self._validate_cached_shape("crater_mask", crater_mask, ref.shape, tile_id, roi_pixels)
+            self._validate_cached_shape("crater_distance_m", crater_distance_m, ref.shape, tile_id, roi_pixels)
+            self._validate_cached_shape("crater_density", crater_density, ref.shape, tile_id, roi_pixels)
+
             return {
-                "crater_proba": crater_mask.astype(np.float32), # return as float32 for pipeline consistency, even though it's binary
+                "crater_proba": crater_mask.astype(np.float32, copy=False),
+                "crater_mask": crater_mask.astype(np.uint8, copy=False),
+                "crater_distance_m": crater_distance_m.astype(np.float32, copy=False),
+                "crater_density": crater_density.astype(np.float32, copy=False),
                 "meta": {
                     "model_id": self.model_id,
                     "source": "derived_cache",
-                    "product": str(mask_path.name),
-                    "catalogue": meta,  
+                    "products": {
+                        "crater_mask": str(mask_path.name),
+                        "crater_distance_m": str(distance_path.name),
+                        "crater_density": str(density_path.name),
+                    },
+                    "catalogue": meta,
                 },
             }
+
+
         # If not, build it from the catalogue
         if dem_img_path is None or robbins_csv_path is None:
             raise ValueError(
