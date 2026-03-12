@@ -137,14 +137,14 @@ class CraterPredictor:
         # If not, build it from the catalogue
         if dem_img_path is None or robbins_csv_path is None:
             raise ValueError(
-                "Crater mask not found in derived cache. Provide dem_img_path and robbins_csv_path to build it "
-                "(or set rebuild_if_missing=False and precompute it)."
+                "Crater products not found in cache. Provide dem_img_path and robbins_csv_path "
+                "to build them, or ensure the cache exists."
             )
         # Use provided raster_config or default if not provided
         cfg = raster_config if raster_config is not None else CraterRasterConfig() # use provided config or default config
 
         # build the crater mask from the catalogue (this will also handle coordinate transforms and rasterisation)
-        out = build_crater_mask_from_catalogue(
+        out = build_crater_products_from_catalogue(
             robbins_csv_path=robbins_csv_path,
             dem_img_path=dem_img_path,
             roi_pixels=roi_pixels,
@@ -152,8 +152,11 @@ class CraterPredictor:
         )
 
     # Extract outputs
+    
         crater_mask = out["crater_mask"] # binary mask of shape (rows, cols) where 1 indicates crater presence according to the catalogue
         crater_meta = out["metadata"] # e.g. number of craters rasterised, any warnings about craters outside the ROI, etc.
+        crater_distance_m = out["crater_distance_m"] # raster of same shape where each pixel value is the distance in meters to the nearest crater rim
+        crater_density = out["crater_density"] # raster of same shape where each pixel value
 
         # sanity check the output shape matches our reference raster
 
