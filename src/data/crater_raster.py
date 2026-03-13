@@ -175,7 +175,7 @@ def _compute_distance_to_crater(binary_mask: np.ndarray, pixel_size_m: float, ma
 # Main
 # ----------------------------------------------------------------------------
 
-def build_crater_mask_from_catalogue(
+def build_crater_products_from_catalogue(
     *,
     robbins_csv_path: str | Path,
     dem_img_path: str | Path,
@@ -363,7 +363,7 @@ def build_crater_mask_from_catalogue(
         "metadata": metadata,
     }
 
-"backwards compatibility wrapper for CraterPredictor"
+"""backwards compatibility wrapper for CraterPredictor"""
 def build_crater_mask_from_catalogue(
     *,
     robbins_csv_path: str | Path,
@@ -373,7 +373,7 @@ def build_crater_mask_from_catalogue(
 
 ) -> Dict[str, Any]:
     
-    out = build_crater_mask_from_catalogue(
+    out = build_crater_products_from_catalogue(
         robbins_csv_path=robbins_csv_path,
         dem_img_path=dem_img_path,
         roi_pixels=roi_pixels,
