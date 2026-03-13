@@ -21,10 +21,7 @@ import json
 
 import numpy as np
 
-from src.data.crater_raster import (
-    CraterRasterConfig,
-    build_crater_products_from_catalogue,
-)
+from src.data.crater_raster import (build_crater_mask_from_catalogue, CraterRasterConfig )
 
 
 @dataclass
