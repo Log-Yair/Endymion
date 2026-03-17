@@ -389,3 +389,79 @@ class DataHandler:
         )
         return RasterTile(tile_id=tile_id, data=arr, lbl=lbl)
 
+    def _extract_roi(self, raster: np.ndarray, roi: ROI) -> np.ndarray:
+        r0, r1, c0, c1 = roi
+        if not (0 <= r0 < r1 <= raster.shape[0] and 0 <= c0 < c1 <= raster.shape[1]):
+            raise ValidationError(f"ROI {roi} out of bounds for raster shape {raster.shape}")
+        return np.array(raster[r0:r1, c0:c1], dtype=np.float32, copy=True)
+
+    def _standardise_to_meters(self, patch: np.ndarray, lbl: LBLMeta) -> np.ndarray:
+        out = patch.astype(np.float32, copy=False)
+
+        if lbl.missing_constant is not None:
+            out[out == float(lbl.missing_constant)] = np.nan
+
+        if lbl.scaling_factor is not None:
+            out = (out * float(lbl.scaling_factor)).astype(np.float32, copy=False)
+
+        if (lbl.unit or "").upper() in {"KILOMETER", "KILOMETRE", "KM"}:
+            out = (out * 1000.0).astype(np.float32, copy=False)
+
+        return out
+
+    def _validate_patch(self, patch_m: np.ndarray, roi: ROI, meta: RasterMeta) -> None:
+        r0, r1, c0, c1 = roi
+        expected_shape = (r1 - r0, c1 - c0)
+        if patch_m.shape != expected_shape:
+            raise ValidationError(f"Patch shape {patch_m.shape} != expected {expected_shape}")
+
+        nan_ratio = float(np.isnan(patch_m).mean())
+        if nan_ratio > 0.95:
+            raise ValidationError(f"Patch NaN ratio too high: {nan_ratio:.3f}")
+
+        vmin = float(np.nanmin(patch_m))
+        vmax = float(np.nanmax(patch_m))
+        if not (np.isfinite(vmin) and np.isfinite(vmax)):
+            raise ValidationError("Patch has no finite values.")
+
+        meta.extra.update({
+            "nan_ratio": nan_ratio,
+            "min_m": vmin,
+            "max_m": vmax,
+        })
+
+    # =========================
+    # Derived / navigation storage
+    # =========================
+
+    def _roi_key(self, roi: ROI) -> str:
+        r0, r1, c0, c1 = roi
+        return f"roi_{r0}_{r1}_{c0}_{c1}"
+
+    def derived_dir(self, tile_id: str, roi: ROI) -> Path:
+        return self.persistent_dir / "derived" / tile_id / self._roi_key(roi)
+
+    def save_derived(self, tile_id: str, roi: ROI, dem_m: np.ndarray,
+                     features: Dict[str, np.ndarray],
+                     meta_extra: Optional[Dict[str, Any]] = None) -> Path:
+        out_dir = self.derived_dir(tile_id, roi)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        np.save(out_dir / "dem_m.npy", dem_m.astype(np.float32, copy=False))
+
+        if "slope_deg" in features:
+            np.save(out_dir / "slope_deg.npy", features["slope_deg"].astype(np.float32, copy=False))
+        if "roughness_rms" in features:
+            np.save(out_dir / "roughness_rms.npy", features["roughness_rms"].astype(np.float32, copy=False))
+
+        meta = {
+            "tile_id": tile_id,
+            "roi": list(roi),
+            "shape": list(dem_m.shape),
+            "units": "m",
+            "products": [p for p in ["dem_m", "slope_deg", "roughness_rms"]
+                         if (out_dir / f"{p}.npy").exists()],
+            "extra": meta_extra or {},
+        }
+        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        return out_dir
