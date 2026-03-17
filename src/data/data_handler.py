@@ -250,3 +250,142 @@ class DataHandler:
                     if chunk:
                         f.write(chunk)
         tmp.replace(out_path)
+
+    # =========================
+    # GeoTIFF loading
+    # =========================
+
+    def _get_patch_from_geotiff(
+        self,
+        tile_id: str,
+        tif_path: Path,
+        roi: ROI,
+        verbose: bool = False,
+    ) -> RasterPatch:
+        r0, r1, c0, c1 = roi
+
+        with rasterio.open(tif_path) as ds:
+            if ds.count < 1:
+                raise ValidationError(f"No raster band found in {tif_path}")
+
+            if not (0 <= r0 < r1 <= ds.height and 0 <= c0 < c1 <= ds.width):
+                raise ValidationError(
+                    f"ROI {roi} out of bounds for GeoTIFF shape {(ds.height, ds.width)}"
+                )
+
+            patch = ds.read(1, window=((r0, r1), (c0, c1))).astype(np.float32, copy=False)
+
+            nodata = ds.nodata
+            if nodata is not None and np.isfinite(nodata):
+                patch = patch.copy()
+                patch[patch == nodata] = np.nan
+
+            meta = RasterMeta(
+                tile_id=tile_id,
+                shape=patch.shape,
+                dtype=str(patch.dtype),
+                units="m",
+                nodata=np.nan,
+                extra={},
+            )
+
+            self._validate_patch(patch, roi, meta)
+
+            if verbose:
+                meta.extra.update({
+                    "source_format": "geotiff",
+                    "tif_path": str(tif_path),
+                    "crs": str(ds.crs),
+                    "transform": tuple(ds.transform),
+                    "full_shape": (ds.height, ds.width),
+                    "resolution": ds.res,
+                })
+
+        return RasterPatch(data=patch, meta=meta, roi=roi)
+
+    # =========================
+    # LBL parsing + IMG loading
+    # =========================
+
+    def _parse_lbl(self, lbl_path: Path) -> LBLMeta:
+        fields: Dict[str, str] = {}
+
+        try:
+            text = lbl_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception as e:
+            raise LabelParseError(f"Failed to read LBL: {lbl_path} ({e})")
+
+        for raw in text:
+            line = raw.strip()
+            if (not line) or line.startswith("/*") or "=" not in line:
+                continue
+
+            key, val = [x.strip() for x in line.split("=", 1)]
+            key_u = key.upper()
+
+            if key_u in {
+                "LINES", "LINE_SAMPLES", "SAMPLE_TYPE", "SAMPLE_BITS",
+                "UNIT", "SCALING_FACTOR", "OFFSET", "MISSING_CONSTANT"
+            }:
+                fields[key_u] = val.strip().strip('"')
+
+        def req_int(k: str) -> int:
+            if k not in fields:
+                raise LabelParseError(f"LBL missing required field: {k}")
+            return int(fields[k])
+
+        def req_str(k: str) -> str:
+            if k not in fields:
+                raise LabelParseError(f"LBL missing required field: {k}")
+            return str(fields[k])
+
+        return LBLMeta(
+            lines=req_int("LINES"),
+            line_samples=req_int("LINE_SAMPLES"),
+            sample_type=req_str("SAMPLE_TYPE"),
+            sample_bits=req_int("SAMPLE_BITS"),
+            unit=fields.get("UNIT"),
+            scaling_factor=float(fields["SCALING_FACTOR"]) if "SCALING_FACTOR" in fields else None,
+            offset=float(fields["OFFSET"]) if "OFFSET" in fields else None,
+            missing_constant=float(fields["MISSING_CONSTANT"]) if "MISSING_CONSTANT" in fields else None,
+            extra={k: v for k, v in fields.items()},
+        )
+
+    def _numpy_dtype_from_sample_type(self, sample_type: str, sample_bits: int) -> np.dtype:
+        st = (sample_type or "").upper()
+
+        if ("REAL" not in st) and ("FLOAT" not in st):
+            raise ValueError(f"Unsupported SAMPLE_TYPE: {sample_type}")
+
+        if sample_bits == 32:
+            if ("PC" in st) or ("LSB" in st):
+                return np.dtype("<f4")
+            if "MSB" in st:
+                return np.dtype(">f4")
+            return np.dtype("f4")
+
+        if sample_bits == 64:
+            if ("PC" in st) or ("LSB" in st):
+                return np.dtype("<f8")
+            if "MSB" in st:
+                return np.dtype(">f8")
+            return np.dtype("f8")
+
+        raise ValueError(f"Unsupported SAMPLE_BITS: {sample_bits}")
+
+    def _load_float_img(self, tile_id: str, img_path: Path, lbl: LBLMeta) -> RasterTile:
+        dtype = self._numpy_dtype_from_sample_type(lbl.sample_type, lbl.sample_bits)
+
+        expected_bytes = lbl.lines * lbl.line_samples * (lbl.sample_bits // 8)
+        actual_bytes = img_path.stat().st_size
+        if actual_bytes < expected_bytes:
+            raise IOError(f"IMG too small for tile '{tile_id}'")
+
+        arr = np.memmap(
+            img_path,
+            dtype=dtype,
+            mode="r",
+            shape=(lbl.lines, lbl.line_samples),
+        )
+        return RasterTile(tile_id=tile_id, data=arr, lbl=lbl)
+
