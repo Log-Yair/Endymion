@@ -211,4 +211,42 @@ class DataHandler:
         self._copy_if_needed(ps_lbl, rt_lbl)
         return rt_img, rt_lbl
 
-    
+    def _ensure_local_geotiff(self, spec: GeoTiffTileSpec) -> Path:
+        rt_tif = self.runtime_dir / spec.tif_filename
+        ps_tif = self.persistent_dir / spec.tif_filename
+
+        if rt_tif.exists() and not self.force_download:
+            return rt_tif
+
+        if ps_tif.exists() and not self.force_download:
+            self._copy_if_needed(ps_tif, rt_tif)
+            return rt_tif
+
+        if not self.allow_download:
+            raise TileNotFoundError(
+                f"GeoTIFF not found locally and downloads are disabled: {spec.tile_id}"
+            )
+
+        self._download_file(f"{self.base_url}/{spec.tif_filename}", ps_tif)
+        self._copy_if_needed(ps_tif, rt_tif)
+        return rt_tif
+
+    def _copy_if_needed(self, src: Path, dst: Path) -> None:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if (not dst.exists()) or (dst.stat().st_size != src.stat().st_size):
+            shutil.copy2(src, dst)
+
+    def _download_file(self, url: str, out_path: Path) -> None:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if out_path.exists() and not self.force_download:
+            return
+
+        tmp = out_path.with_suffix(out_path.suffix + ".part")
+        with requests.get(url, stream=True, timeout=(15, self.timeout_s)) as r:
+            r.raise_for_status()
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+        tmp.replace(out_path)
