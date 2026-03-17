@@ -129,3 +129,86 @@ class DataHandler:
 
         self.cache_dir = self.runtime_dir  # backward compatibility
 
+    # =========================
+    # Public API
+    # =========================
+
+    def get_patch(self, tile_id: str, roi: ROI, verbose: bool = False) -> RasterPatch:
+        spec = self._get_tile(tile_id)
+
+        if isinstance(spec, GeoTiffTileSpec):
+            tif_path = self._ensure_local_geotiff(spec)
+            return self._get_patch_from_geotiff(tile_id, tif_path, roi, verbose=verbose)
+
+        if isinstance(spec, LOLATileSpec):
+            img_path, lbl_path = self._ensure_local_lola(spec)
+            lbl = self._parse_lbl(lbl_path)
+            tile = self._load_float_img(tile_id, img_path, lbl)
+
+            patch = self._extract_roi(tile.data, roi)
+            patch_m = self._standardise_to_meters(patch, lbl)
+
+            meta = RasterMeta(
+                tile_id=tile_id,
+                shape=patch_m.shape,
+                dtype=str(patch_m.dtype),
+                units="m",
+                nodata=np.nan,
+                extra={},
+            )
+
+            self._validate_patch(patch_m, roi, meta)
+
+            if verbose:
+                meta.extra.update({
+                    "source_format": "img_lbl",
+                    "lbl_unit": lbl.unit,
+                    "lbl_scaling_factor": lbl.scaling_factor,
+                    "lbl_offset": lbl.offset,
+                    "tile_shape": (lbl.lines, lbl.line_samples),
+                })
+
+            return RasterPatch(data=patch_m, meta=meta, roi=roi)
+
+        raise DataHandlerError(f"Unsupported tile spec for tile_id={tile_id}")
+
+    # =========================
+    # Tile resolution
+    # =========================
+
+    def _get_tile(self, tile_id: str) -> TileSpec:
+        spec = self.tiles.get(tile_id)
+        if spec is None:
+            raise TileNotFoundError(
+                f"Unknown tile_id '{tile_id}'. Available: {list(self.tiles.keys())}"
+            )
+        return spec
+
+    def _ensure_local_lola(self, spec: LOLATileSpec) -> Tuple[Path, Path]:
+        rt_img = self.runtime_dir / spec.img_filename
+        rt_lbl = self.runtime_dir / spec.lbl_filename
+
+        ps_img = self.persistent_dir / spec.img_filename
+        ps_lbl = self.persistent_dir / spec.lbl_filename
+
+        if rt_img.exists() and rt_lbl.exists() and not self.force_download:
+            return rt_img, rt_lbl
+
+        if ps_img.exists() and ps_lbl.exists() and not self.force_download:
+            self._copy_if_needed(ps_img, rt_img)
+            self._copy_if_needed(ps_lbl, rt_lbl)
+            return rt_img, rt_lbl
+
+        if not self.allow_download:
+            raise TileNotFoundError(
+                f"LOLA tile not found locally and downloads are disabled: {spec.tile_id}"
+            )
+
+        self._download_file(f"{self.base_url}/{spec.img_filename}", ps_img)
+        self._download_file(f"{self.base_url}/{spec.lbl_filename}", ps_lbl)
+
+        self._copy_if_needed(ps_img, rt_img)
+        self._copy_if_needed(ps_lbl, rt_lbl)
+        return rt_img, rt_lbl
+
+    
