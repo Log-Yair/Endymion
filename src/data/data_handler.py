@@ -34,6 +34,7 @@ class LOLATileSpec:
 class GeoTiffTileSpec:
     tile_id: str
     tif_filename: str
+    tif_url: str | None = None
 
 
 TileSpec = Union[LOLATileSpec, GeoTiffTileSpec]
