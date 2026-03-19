@@ -5,6 +5,13 @@
 # - Idea based on your existing DataHandler flow plus Rasterio dataset access.
 # - Keep IMG/LBL support for backward compatibility during migration.
 
+# new notes:
+# - Final Endymion canonical ROI policy for the GeoTIFF workflow.
+# - Based on the selected south-polar COG product:
+#   LDEM_80S_20MPP_ADJ.TIF (80°S to 90°S, 20 m/pixel).
+# - The canonical ROI is intentionally defined from the raster grid itself, not copied from the old IMG/LBL prototype coordinates.
+# - This keeps the ROI stable even if the storage format changes, as long as the GeoTIFF grid remains the same.
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -22,24 +29,25 @@ import rasterio
 
 ROI = Tuple[int, int, int, int]  # (r0, r1, c0, c1)
 
+CANONICAL_PATCH_SIZE = 1024 # pixels (for the GeoTIFF workflow, this is the standard patch size we will use for processing and feature extraction)
 
-@dataclass(frozen=True)
+@dataclass(frozen=True) # immutable dataclass for tile specifications
 class LOLATileSpec:
     tile_id: str
     img_filename: str
     lbl_filename: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True) # immutable dataclass for GeoTIFF tile specifications
 class GeoTiffTileSpec:
     tile_id: str
     tif_filename: str
     tif_url: str | None = None
 
 
-TileSpec = Union[LOLATileSpec, GeoTiffTileSpec]
+TileSpec = Union[LOLATileSpec, GeoTiffTileSpec] # a tile can be specified as either an LOLA IMG/LBL pair or a single GeoTIFF file
 
-
+# Metadata classes for LBL and raster data, plus container classes for patches and tiles.
 @dataclass
 class LBLMeta:
     lines: int
@@ -92,6 +100,29 @@ class LabelParseError(DataHandlerError):
 class ValidationError(DataHandlerError):
     pass
 
+# =========
+# ROI
+# =========================
+def centered_roi(height: int, width: int, size: int = CANONICAL_PATCH_SIZE) -> ROI:
+    """
+    Return a square ROI centred on the raster grid.
+    This is the final canonical ROI rule for the GeoTIFF-based Endymion pipeline.
+    For the south-polar stereographic LOLA GeoTIFF, the raster centre corresponds
+    to the lunar south-pole reference area.
+    """
+    if np.size <= 0:
+        raise ValueError("size must be positive")
+    if size > height or size > width:
+        raise ValueError(
+            f"Requested size {size} exceeds raster shape {(height, width)}"
+        )
+
+    r0 = (height - size) // 2
+    c0 = (width - size) // 2
+    r1 = r0 + size
+    c1 = c0 + size
+    return (r0, r1, c0, c1)
+
 
 class DataHandler:
     """
@@ -129,6 +160,8 @@ class DataHandler:
         self.timeout_s = timeout_s
 
         self.cache_dir = self.runtime_dir  # backward compatibility
+
+    
 
     # =========================
     # Public API
