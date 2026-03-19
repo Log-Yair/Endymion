@@ -161,7 +161,35 @@ class DataHandler:
 
         self.cache_dir = self.runtime_dir  # backward compatibility
 
-    
+    # =========================
+    # Tile metadata and raster shape
+    # ========================
+    def get_raster_shape(self, tile_id: str) -> Tuple[int, int]:
+        """
+        Return full raster shape (rows, cols) for the selected tile.
+        Works for both GeoTIFF and IMG/LBL tiles.
+        """
+        spec = self._get_tile(tile_id)
+
+        if isinstance(spec, GeoTiffTileSpec):
+            tif_path = self._ensure_local_geotiff(spec)
+            with rasterio.open(tif_path) as ds:
+                return (ds.height, ds.width)
+
+        if isinstance(spec, LOLATileSpec):
+            img_path, lbl_path = self._ensure_local_lola(spec)
+            lbl = self._parse_lbl(lbl_path)
+            return (lbl.lines, lbl.line_samples)
+
+        raise TileNotFoundError(f"Unsupported tile spec type for tile_id={tile_id}")
+
+    def canonical_roi(self, tile_id: str, size: int = CANONICAL_PATCH_SIZE) -> ROI:
+        """
+        Resolve the final canonical ROI for a tile.
+        For the GeoTIFF workflow, this is the centred south-pole reference ROI.
+        """
+        height, width = self.get_raster_shape(tile_id)
+        return centered_roi(height, width, size=size)
 
     # =========================
     # Public API
