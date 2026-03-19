@@ -29,23 +29,25 @@ import rasterio
 
 ROI = Tuple[int, int, int, int]  # (r0, r1, c0, c1)
 
-CANONICAL_PATCH_SIZE = 1024 # pixels (for the GeoTIFF workflow, this is the standard patch size we will use for processing and feature extraction)
+CANONICAL_PATCH_SIZE = 1024  # pixels (for the GeoTIFF workflow, this is the standard patch size we will use for processing and feature extraction)
 
-@dataclass(frozen=True) # immutable dataclass for tile specifications
+
+@dataclass(frozen=True)  # immutable dataclass for tile specifications
 class LOLATileSpec:
     tile_id: str
     img_filename: str
     lbl_filename: str
 
 
-@dataclass(frozen=True) # immutable dataclass for GeoTIFF tile specifications
+@dataclass(frozen=True)  # immutable dataclass for GeoTIFF tile specifications
 class GeoTiffTileSpec:
     tile_id: str
     tif_filename: str
     tif_url: str | None = None
 
 
-TileSpec = Union[LOLATileSpec, GeoTiffTileSpec] # a tile can be specified as either an LOLA IMG/LBL pair or a single GeoTIFF file
+TileSpec = Union[LOLATileSpec, GeoTiffTileSpec]  # a tile can be specified as either an LOLA IMG/LBL pair or a single GeoTIFF file
+
 
 # Metadata classes for LBL and raster data, plus container classes for patches and tiles.
 @dataclass
@@ -100,7 +102,8 @@ class LabelParseError(DataHandlerError):
 class ValidationError(DataHandlerError):
     pass
 
-# =========
+
+# =========================
 # ROI
 # =========================
 def centered_roi(height: int, width: int, size: int = CANONICAL_PATCH_SIZE) -> ROI:
@@ -110,7 +113,7 @@ def centered_roi(height: int, width: int, size: int = CANONICAL_PATCH_SIZE) -> R
     For the south-polar stereographic LOLA GeoTIFF, the raster centre corresponds
     to the lunar south-pole reference area.
     """
-    if np.size <= 0:
+    if size <= 0:
         raise ValueError("size must be positive")
     if size > height or size > width:
         raise ValueError(
@@ -163,7 +166,7 @@ class DataHandler:
 
     # =========================
     # Tile metadata and raster shape
-    # ========================
+    # =========================
     def get_raster_shape(self, tile_id: str) -> Tuple[int, int]:
         """
         Return full raster shape (rows, cols) for the selected tile.
@@ -289,7 +292,8 @@ class DataHandler:
                 f"GeoTIFF not found locally and downloads are disabled: {spec.tile_id}"
             )
 
-        self._download_file(f"{self.base_url}/{spec.tif_filename}", ps_tif)
+        url = spec.tif_url if spec.tif_url else f"{self.base_url}/{spec.tif_filename}"
+        self._download_file(url, ps_tif)
         self._copy_if_needed(ps_tif, rt_tif)
         return rt_tif
 
@@ -469,6 +473,9 @@ class DataHandler:
         if (lbl.unit or "").upper() in {"KILOMETER", "KILOMETRE", "KM"}:
             out = (out * 1000.0).astype(np.float32, copy=False)
 
+        if lbl.offset is not None:
+            out = (out + float(lbl.offset)).astype(np.float32, copy=False)
+
         return out
 
     def _validate_patch(self, patch_m: np.ndarray, roi: ROI, meta: RasterMeta) -> None:
@@ -503,9 +510,17 @@ class DataHandler:
     def derived_dir(self, tile_id: str, roi: ROI) -> Path:
         return self.persistent_dir / "derived" / tile_id / self._roi_key(roi)
 
-    def save_derived(self, tile_id: str, roi: ROI, dem_m: np.ndarray,
-                     features: Dict[str, np.ndarray],
-                     meta_extra: Optional[Dict[str, Any]] = None) -> Path:
+    def navigation_dir(self, tile_id: str, roi: ROI, run_name: str) -> Path:
+        return self.derived_dir(tile_id, roi) / "navigation" / run_name
+
+    def save_derived(
+        self,
+        tile_id: str,
+        roi: ROI,
+        dem_m: np.ndarray,
+        features: Dict[str, np.ndarray],
+        meta_extra: Optional[Dict[str, Any]] = None,
+    ) -> Path:
         out_dir = self.derived_dir(tile_id, roi)
         out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -521,9 +536,61 @@ class DataHandler:
             "roi": list(roi),
             "shape": list(dem_m.shape),
             "units": "m",
-            "products": [p for p in ["dem_m", "slope_deg", "roughness_rms"]
-                         if (out_dir / f"{p}.npy").exists()],
+            "products": [p for p in ["dem_m", "slope_deg", "roughness_rms"] if (out_dir / f"{p}.npy").exists()],
             "extra": meta_extra or {},
         }
         (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        return out_dir
+
+    def load_derived(self, tile_id: str, roi: ROI) -> Optional[Dict[str, Any]]:
+        out_dir = self.derived_dir(tile_id, roi)
+        meta_path = out_dir / "meta.json"
+        dem_path = out_dir / "dem_m.npy"
+
+        if not meta_path.exists() or not dem_path.exists():
+            return None
+
+        meta = json.loads(meta_path.read_text())
+
+        out: Dict[str, Any] = {
+            "meta": meta,
+            "dem_m": np.load(dem_path),
+        }
+
+        slope_path = out_dir / "slope_deg.npy"
+        rough_path = out_dir / "roughness_rms.npy"
+
+        if slope_path.exists():
+            out["slope_deg"] = np.load(slope_path)
+        if rough_path.exists():
+            out["roughness_rms"] = np.load(rough_path)
+
+        return out
+
+    def save_navigation(
+        self,
+        tile_id: str,
+        roi: ROI,
+        hazard: np.ndarray,
+        cost: np.ndarray,
+        path_rc: np.ndarray,
+        run_name: str = "run_v1",
+        nav_meta: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        out_dir = self.navigation_dir(tile_id, roi, run_name)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        np.save(out_dir / "hazard.npy", hazard.astype(np.float32, copy=False))
+        np.save(out_dir / "cost.npy", cost.astype(np.float32, copy=False))
+        np.save(out_dir / "path_rc.npy", np.asarray(path_rc, dtype=np.int32))
+
+        meta = {
+            "tile_id": tile_id,
+            "roi": list(roi),
+            "shape": list(hazard.shape),
+            "run_name": run_name,
+            "products": ["hazard", "cost", "path_rc"],
+            "nav_meta": nav_meta or {},
+        }
+        (out_dir / "nav_meta.json").write_text(json.dumps(meta, indent=2, allow_nan=False))
         return out_dir
