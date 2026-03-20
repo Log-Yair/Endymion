@@ -37,9 +37,8 @@ from typing import Dict, Tuple, Optional, Any
 import numpy as np
 import pandas as pd
 import rasterio # for reading DEM and coordinate reprojection
-from rasterio.warp import transform # for coordinate reprojection
 from scipy.ndimage import distance_transform_edt # for computing distance to nearest crater cell
-
+from pyproj import CRS, Transformer
 
 # ----------------------------------------------------------------------------
 # Types
@@ -268,13 +267,26 @@ def build_crater_products_from_catalogue(
         # Normalise lon into [-180, 180]
         lons = ((lons + 180.0) % 360.0) - 180.0
 
-        # Reproject WGS84 -> DEM CRS
-        xs, ys = transform(
-            src_crs="EPSG:4326",
-            dst_crs=ds.crs,
-            xs=lons.tolist(),
-            ys=lats.tolist(),
+        # Reproject lunar geographic coordinates -> DEM CRS
+        #
+        # Important:
+        # - Robbins catalogue coordinates are lunar lat/lon, not Earth WGS84.
+        # - Therefore EPSG:4326 is wrong here.
+        # - derive the matching lunar geographic CRS from the DEM's base CRS.
+
+        dem_crs = CRS.from_user_input(ds.crs)
+        lunar_geo_crs = dem_crs.geodetic_crs
+
+        if lunar_geo_crs is None:
+            raise ValueError("Could not derive lunar geographic CRS from DEM CRS.")
+
+        transformer = Transformer.from_crs(
+            lunar_geo_crs,
+            dem_crs,
+            always_xy=True,
         )
+
+        xs, ys = transformer.transform(lons, lats)
 
         # Projected (x,y) -> pixel indices (row, col)
         pixel_rows, pixel_cols = ds.index(xs, ys)
