@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 import rasterio # for reading DEM and coordinate reprojection
 from scipy.ndimage import distance_transform_edt # for computing distance to nearest crater cell
-from pyproj import CRS, Transformer
+from pyproj import CRS, Transformer # for coordinate reprojection from lunar geographic to DEM CRS
 
 # ----------------------------------------------------------------------------
 # Types
