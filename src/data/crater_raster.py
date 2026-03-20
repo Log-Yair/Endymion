@@ -205,7 +205,44 @@ def build_crater_products_from_catalogue(
     
 
     #  Load catalogue 
-    crater_df = pd.read_csv(robbins_csv_path) # problem here if file is missing or malformed
+    # Notes:
+    # - Current local Robbins file has no header row.
+    # - First line appears malformed/incomplete (9 fields), while valid records have 21 fields.
+    # - So we skip the first line and assign the expected Robbins column names manually.
+
+    robbins_columns = [
+        "CRATER_ID",
+        "LAT_CIRC_IMG",
+        "LON_CIRC_IMG",
+        "LAT_ELLI_IMG",
+        "LON_ELLI_IMG",
+        "DIAM_CIRC_IMG",
+        "DIAM_CIRC_SD_IMG",
+        "DIAM_ELLI_MAJOR_IMG",
+        "DIAM_ELLI_MINOR_IMG",
+        "DIAM_ELLI_ECCEN_IMG",
+        "DIAM_ELLI_ELLIP_IMG",
+        "DIAM_ELLI_ANGLE_IMG",
+        "LAT_ELLI_SD_IMG",
+        "LON_ELLI_SD_IMG",
+        "DIAM_ELLI_MAJOR_SD_IMG",
+        "DIAM_ELLI_MINOR_SD_IMG",
+        "DIAM_ELLI_ANGLE_SD_IMG",
+        "DIAM_ELLI_ECCEN_SD_IMG",
+        "DIAM_ELLI_ELLIP_SD_IMG",
+        "ARC_IMG",
+        "PTS_RIM_IMG",
+    ]
+
+    crater_df = pd.read_csv(
+        robbins_csv_path,
+        header=None,
+        names=robbins_columns,
+        skiprows=1,
+        encoding="utf-8-sig",
+    )
+
+    crater_df.columns = crater_df.columns.str.strip()
     
     # Check required columns exist
     required_columns = [
