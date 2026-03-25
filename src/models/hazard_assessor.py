@@ -289,12 +289,29 @@ class HazardAssessor:
         if arr.ndim != 2:
             raise ValueError(f"{name} must be a 2D raster. Got {arr.ndim}D.") # Dimensionality check for non-None arrays
 
-    @staticmethod
-    def _validate_inputs(a: np.ndarray, b: np.ndarray) -> None:
-        """Ensure arrays are compatible for elementwise hazard computation."""
-        if not isinstance(a, np.ndarray) or not isinstance(b, np.ndarray):
-            raise TypeError("Inputs must be numpy arrays.")
-        if a.shape != b.shape:
-            raise ValueError(f"Input shapes must match: {a.shape} vs {b.shape}")
-        if a.ndim != 2 or b.ndim != 2:
-            raise ValueError(f"Inputs must be 2D rasters. Got {a.ndim}D and {b.ndim}D.")
+    def _validate_inputs(
+        self,
+        *,
+        slope_deg: np.ndarray,
+        roughness_rms: np.ndarray,
+        crater_mask: Optional[np.ndarray],
+        crater_distance_m: Optional[np.ndarray],
+        crater_density: Optional[np.ndarray],
+        ) -> None:
+
+        if not isinstance(slope_deg, np.ndarray) or not isinstance(roughness_rms, np.ndarray):
+            raise TypeError("slope_deg and roughness_rms must be numpy arrays.")
+        if slope_deg.shape != roughness_rms.shape:
+            raise ValueError(
+                f"input shapes do not match: slope_deg {slope_deg.shape}, roughness_rms {roughness_rms.shape}"
+            )
+        if slope_deg.ndim != 2 or roughness_rms.ndim != 2:
+            raise ValueError(
+                f"input arrays must be 2D (H,W). Got slope_deg {slope_deg.ndim}D, roughness_rms {roughness_rms.ndim}D."
+            )
+        
+        # Validate optional crater inputs against slope_deg shape
+        self._validate_same_shape(slope_deg, crater_mask, "crater_mask")
+        self._validate_same_shape(slope_deg, crater_distance_m, "crater_distance_m")
+        self._validate_same_shape(slope_deg, crater_density, "crater_density")
+        
