@@ -244,7 +244,18 @@ class HazardAssessor:
         return risk.astype(np.float32)
     
 
-    
+    def _prepare_crater_density(
+        self,
+        crater_density: Optional[np.ndarray],
+        expected_shape: tuple[int, int],
+    ) -> np.ndarray:
+        """
+        Normalise crater density to [0,1] based on max expected density.
+        """
+        if crater_density is None:
+            return np.zeros(expected_shape, dtype=np.float32)
+        
+        return self._normalise(crater_density, vmax=self.crater_density_max)
 
     @staticmethod
     def _validate_inputs(a: np.ndarray, b: np.ndarray) -> None:
