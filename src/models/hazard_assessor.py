@@ -225,6 +225,27 @@ class HazardAssessor:
         out = arr.astype(np.float32, copy=False) / float(vmax)
         return np.clip(out, 0.0, 1.0)
 
+    def _distance_to_risk(
+        self,
+        crater_distance_m: Optional[np.ndarray],
+        expected_shape: tuple[int, int],
+    ) -> np.ndarray:
+        
+        """
+        Convert crater distance to a risk score between 0 and 1
+        Rule : 
+        - distance = 0 -> risk = 1 (high risk)
+        - distance >= safe -> risk = 0 (low risk)
+        """
+        if crater_distance_m is None:
+            return np.zeros(expected_shape, dtype=np.float32)
+        arr = crater_distance_m.astype(np.float32, copy=False)
+        risk = 1.0 - np.clip(arr / float(self.crater_distance_safe_m), 0.0, 1.0)
+        return risk.astype(np.float32)
+    
+
+    
+
     @staticmethod
     def _validate_inputs(a: np.ndarray, b: np.ndarray) -> None:
         """Ensure arrays are compatible for elementwise hazard computation."""
