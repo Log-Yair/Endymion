@@ -287,7 +287,7 @@ def build_crater_products_from_catalogue(
             always_xy=True,
         )
 
-        xs, ys = transformer.transform(lons.to_numpy(), lats.to_numpy()) # reprojected coordinates in DEM CRS (x, y)
+        xs, ys = transformer.transform(lons, lats) # reprojected coordinates in DEM CRS (x, y)
 
         xs =np.asarray(xs, dtype=np.float64) # ensure numpy array of floats
         ys = np.asarray(ys, dtype=np.float64) # ensure numpy array of floats
