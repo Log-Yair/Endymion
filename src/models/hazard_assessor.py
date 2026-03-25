@@ -71,10 +71,28 @@ class HazardAssessor:
         slope_deg: np.ndarray,
         roughness_rms: np.ndarray,
         dem_m: Optional[np.ndarray] = None,
+        crater_mask: Optional[np.ndarray] = None,
+        crater_distance_m: Optional[np.ndarray] = None,
+        crater_density: Optional[np.ndarray] = None,
     ) -> Dict[str, np.ndarray]:
         """
-        Compute a hazard map from cached terrain rasters.
-        dem_m is unused in Phase 1 (kept for extensibility).
+        Compute a unified hazard map.
+
+        Required:
+        - slope_deg
+        - roughness_rms
+
+        Optional crater inputs:
+        - crater_mask
+        - crater_distance_m
+        - crater_density
+
+        Returns
+        -------
+        dict with:
+        - hazard
+        - components
+        - meta
         """
         self._validate_inputs(slope_deg, roughness_rms)
 
