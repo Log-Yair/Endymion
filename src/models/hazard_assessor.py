@@ -222,7 +222,7 @@ class HazardAssessor:
         Clip and normalise array to [0,1].
         NaNs are preserved.
         """
-        out = arr.astype(np.float32, copy=False) / float(vmax)
+        out = arr.astype(np.float32, copy=False) / float(vmax) # Ensure float division
         return np.clip(out, 0.0, 1.0)
 
     def _distance_to_risk(
@@ -239,11 +239,11 @@ class HazardAssessor:
         """
         if crater_distance_m is None:
             return np.zeros(expected_shape, dtype=np.float32)
-        arr = crater_distance_m.astype(np.float32, copy=False)
-        risk = 1.0 - np.clip(arr / float(self.crater_distance_safe_m), 0.0, 1.0)
-        return risk.astype(np.float32)
+        arr = crater_distance_m.astype(np.float32, copy=False) # Ensure float for division
+        risk = 1.0 - np.clip(arr / float(self.crater_distance_safe_m), 0.0, 1.0) # Invert and clip to [0,1]
+        return risk.astype(np.float32) # Ensure output is float32
     
-    @staticmethod
+    
     def _prepare_crater_density(
         self,
         crater_density: Optional[np.ndarray],
@@ -256,6 +256,20 @@ class HazardAssessor:
             return np.zeros(expected_shape, dtype=np.float32)
         
         return self._normalise(crater_density, vmax=self.crater_density_max)
+    
+    @staticmethod
+    def _prepare_crater_mask(
+        crater_mask: Optional[np.ndarray],
+        expected_shape: tuple[int, int],
+    ) -> np.ndarray:
+        """
+        Ensure crater mask is binary and has the expected shape.
+        """
+        if crater_mask is None:
+            return np.zeros(expected_shape, dtype=np.float32)
+        arr = crater_mask.astype(np.float32, copy=False)
+        return np.clip(arr, 0.0, 1.0)
+    
 
     @staticmethod
     def _validate_inputs(a: np.ndarray, b: np.ndarray) -> None:
