@@ -1,10 +1,13 @@
-# -*- coding: utf-8 -*-
-"""
-HazardAssessor for Endymion (Phase 1)
+# References / notes:
+# - Extends the existing Endymion HazardAssessor (terrain_weighted_v1).
+# - Keeps backwards compatibility with Phase-1 usage.
+# - Designed to accept crater products exposed by CraterPredictor:
+#   crater_mask, crater_distance_m, crater_density.
+# - Main idea:
+#     terrain = weighted slope + roughness
+#     crater  = weighted mask + distance-risk + density
+#     hazard  = terrain_weight * terrain + crater_weight * crater
 
-Consumes cached terrain rasters and produces a unified hazard map.
-No feature extraction or ML inference is performed here.
-"""
 
 from __future__ import annotations
 from dataclasses import dataclass
@@ -15,28 +18,51 @@ import numpy as np
 @dataclass
 class HazardAssessor:
     """
-    Phase-1 hazard model based on terrain difficulty.
+    Endymion HazardAssessor (Phase 2)
 
-    Hazard is computed as a weighted combination of:
-    - slope (degrees)
-    - surface roughness (RMS)
+    Supports:
+    - Phase 1 terrain-only hazard
+    - Phase 2 terrain + crater-aware hazard
+
+    Backwards compatibility:
+    If crater inputs are not provided, the model behaves like the original
+    terrain-only version.
     """
 
-    # -------------------------
-    # Normalisation ceilings (prototype defaults; override in pipeline)
-    # -------------------------
-    slope_deg_max: float = 34.55          
-    roughness_rms_max: float = 18.56      
+    # ------------------------------------------------------------------
+    # Terrain normalisation ceilings
+    # ------------------------------------------------------------------
+    slope_deg_max: float = 34.55
+    roughness_rms_max: float = 18.56
 
-    # -------------------------
-    # Weights (should sum to 1.0)
-    # -------------------------
+    # ------------------------------------------------------------------
+    # Terrain weights (within terrain group)
+    # ------------------------------------------------------------------
     w_slope: float = 0.7
     w_roughness: float = 0.3
 
-    # -------------------------
-    # Optional "impassable" mask (prototype safety rule)
-    # -------------------------
+    # ------------------------------------------------------------------
+    # Crater normalisation / risk controls
+    # ------------------------------------------------------------------
+    crater_distance_safe_m: float = 200.0
+    crater_density_max: float = 0.25
+
+    # ------------------------------------------------------------------
+    # Crater weights (within crater group)
+    # ------------------------------------------------------------------
+    w_crater_mask: float = 0.4
+    w_crater_distance: float = 0.4
+    w_crater_density: float = 0.2
+
+    # ------------------------------------------------------------------
+    # Group-level weights
+    # ------------------------------------------------------------------
+    terrain_weight: float = 0.7
+    crater_weight: float = 0.3
+
+    # ------------------------------------------------------------------
+    # Optional hard safety rule
+    # ------------------------------------------------------------------
     use_impassable_mask: bool = True
     impassable_slope_deg: float = 40.0
 
