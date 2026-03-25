@@ -94,18 +94,60 @@ class HazardAssessor:
         - components
         - meta
         """
-        self._validate_inputs(slope_deg, roughness_rms)
+        self._validate_inputs(
+            slope_deg = slope_deg,
+            roughness_rms = roughness_rms,
+            crater_mask = crater_mask,
+            crater_distance_m = crater_distance_m,
+            crater_density = crater_density,
+        )
 
-        # Normalise to [0,1] using robust ceilings (vmax)
+        # Terrain component
         slope_n = self._normalise(slope_deg, vmax=self.slope_deg_max)
         rough_n = self._normalise(roughness_rms, vmax=self.roughness_rms_max)
 
-        # Weighted hazard index
-        hazard = (self.w_slope * slope_n + self.w_roughness * rough_n).astype(np.float32)
+        terrain = (
+            self.w_slope * slope_n +
+            self.w_roughness * rough_n
+        ).astype(np.float32)
 
-        # Optional hard cutoff for extreme slopes
-        if self.use_impassable_mask:
-            hazard[slope_deg > self.impassable_slope_deg] = 1.0
+        # --------------------------------------------------------------
+        # Crater component
+        # --------------------------------------------------------------
+        crater_inputs_present = any(
+            arr is not None
+            for arr in (crater_mask, crater_distance_m, crater_density)
+        )
+
+        # If any crater input is provided, require all three for a complete crater component.
+        if crater_inputs_present:
+            crater_mask_n = self._prepare_crater_mask(crater_mask, slope_deg.shape)
+            crater_distance_risk = self._distance_to_risk(crater_distance_m, slope_deg.shape)
+            crater_density_n = self._prepare_crater_density(crater_density, slope_deg.shape)
+
+            # Combine crater factors into a single crater risk score.
+            crater = (
+                self.w_crater_mask * crater_mask_n +
+                self.w_crater_distance * crater_distance_risk +
+                self.w_crater_density * crater_density_n
+            ).astype(np.float32)
+
+            # Combine terrain and crater into final hazard score.
+            hazard = (
+                self.terrain_weight * terrain +
+                self.crater_weight * crater
+            ).astype(np.float32)
+
+            model_id = "terrain_crater_weighted_v2"
+        else:
+            crater_mask_n = np.zeros_like(slope_n, dtype=np.float32)
+            crater_distance_risk = np.zeros_like(slope_n, dtype=np.float32)
+            crater_density_n = np.zeros_like(slope_n, dtype=np.float32)
+            crater = np.zeros_like(slope_n, dtype=np.float32)
+
+            hazard = terrain.astype(np.float32)
+            model_id = "terrain_weighted_v1_compatible"
+
 
         # Metadata for traceability (stats reflect FINAL hazard)
         meta = {
