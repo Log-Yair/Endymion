@@ -149,29 +149,72 @@ class HazardAssessor:
             model_id = "terrain_weighted_v1_compatible"
 
 
-        # Metadata for traceability (stats reflect FINAL hazard)
+        # --------------------------------------------------------------
+        # Optional hard cutoff for extreme slopes
+        # --------------------------------------------------------------
+        if self.use_impassable_mask:
+            hazard = hazard.copy()
+            hazard[slope_deg > self.impassable_slope_deg] = 1.0
+
+        hazard = np.clip(hazard, 0.0, 1.0).astype(np.float32)
+
         meta = {
-            "model": "terrain_weighted_v1",
-            "weights": {"slope": self.w_slope, "roughness": self.w_roughness},
+            "model": model_id,
+            "groups": {
+                "terrain_weight": self.terrain_weight,
+                "crater_weight": self.crater_weight if crater_inputs_present else 0.0,
+            },
+            "weights": {
+                "terrain": {
+                    "slope": self.w_slope,
+                    "roughness": self.w_roughness,
+                },
+                "crater": {
+                    "mask": self.w_crater_mask,
+                    "distance": self.w_crater_distance,
+                    "density": self.w_crater_density,
+                },
+            },
             "thresholds": {
                 "slope_deg_max": self.slope_deg_max,
                 "roughness_rms_max": self.roughness_rms_max,
+                "crater_distance_safe_m": self.crater_distance_safe_m,
+                "crater_density_max": self.crater_density_max,
                 "use_impassable_mask": self.use_impassable_mask,
                 "impassable_slope_deg": self.impassable_slope_deg,
+            },
+            "crater_inputs_present": {
+                "crater_mask": crater_mask is not None,
+                "crater_distance_m": crater_distance_m is not None,
+                "crater_density": crater_density is not None,
             },
             "stats": {
                 "hazard_min": float(np.nanmin(hazard)),
                 "hazard_max": float(np.nanmax(hazard)),
                 "hazard_mean": float(np.nanmean(hazard)),
                 "nan_ratio": float(np.isnan(hazard).mean()),
+                "terrain_mean": float(np.nanmean(terrain)),
+                "crater_mean": float(np.nanmean(crater)) if crater_inputs_present else 0.0,
             },
         }
 
         return {
             "hazard": hazard,
-            "components": {"slope_norm": slope_n, "roughness_norm": rough_n},
+            "components": {
+                "slope_norm": slope_n,
+                "roughness_norm": rough_n,
+                "terrain_component": terrain,
+                "crater_mask_norm": crater_mask_n,
+                "crater_distance_risk": crater_distance_risk,
+                "crater_density_norm": crater_density_n,
+                "crater_component": crater,
+            },
             "meta": meta,
         }
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     @staticmethod
     def _normalise(arr: np.ndarray, vmax: float) -> np.ndarray:
