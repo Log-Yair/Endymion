@@ -165,7 +165,7 @@ def _compute_distance_to_crater(binary_mask: np.ndarray, pixel_size_m: float, ma
 
     # Optionally clip distance to max_distance_m to avoid huge values dominating stats
     if max_distance_m is not None:
-        distance_m = np.minimum(distance_m, float(max_distance_m).astype(np.float32))
+        distance_m = np.minimum(distance_m, np.float32(max_distance_m)) # clip distance to max_distance_m if specified
 
     return distance_m
 
