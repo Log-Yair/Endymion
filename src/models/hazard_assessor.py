@@ -263,13 +263,31 @@ class HazardAssessor:
         expected_shape: tuple[int, int],
     ) -> np.ndarray:
         """
-        Ensure crater mask is binary and has the expected shape.
+        Ensure crater mask is binary and has the expected shape. Convert to float32. in [0,1].
         """
         if crater_mask is None:
             return np.zeros(expected_shape, dtype=np.float32)
         arr = crater_mask.astype(np.float32, copy=False)
         return np.clip(arr, 0.0, 1.0)
-    
+
+    @staticmethod
+    def _validate_same_shape(
+        ref: np.ndarray, # Used as reference shape for validation
+        arr: Optional[np.ndarray], # Array to validate against reference shape
+        name: str, # Name of the array for error messages
+    ) -> None:
+        """
+        Validate that arr has the same shape as ref.
+        If arr is None, it's considered valid (optional input).
+        """
+        if arr is None:
+            return
+        if not isinstance(arr, np.ndarray):
+            raise TypeError(f"{name} must be a numpy array.") # Type check for non-None arrays
+        if arr.shape != ref.shape:
+            raise ValueError(f"{name} shape {arr.shape} does not match reference shape {ref.shape}.") # Shape check against reference array
+        if arr.ndim != 2:
+            raise ValueError(f"{name} must be a 2D raster. Got {arr.ndim}D.") # Dimensionality check for non-None arrays
 
     @staticmethod
     def _validate_inputs(a: np.ndarray, b: np.ndarray) -> None:
