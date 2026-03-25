@@ -243,7 +243,7 @@ class HazardAssessor:
         risk = 1.0 - np.clip(arr / float(self.crater_distance_safe_m), 0.0, 1.0)
         return risk.astype(np.float32)
     
-
+    @staticmethod
     def _prepare_crater_density(
         self,
         crater_density: Optional[np.ndarray],
