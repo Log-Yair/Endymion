@@ -31,6 +31,7 @@ Requirements
 from __future__ import annotations
 
 from dataclasses import dataclass
+from operator import inv
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Any
 
@@ -286,13 +287,16 @@ def build_crater_products_from_catalogue(
             always_xy=True,
         )
 
-        xs, ys = transformer.transform(lons, lats)
+        xs, ys = transformer.transform(lons.to_numpy(), lats.to_numpy()) # reprojected coordinates in DEM CRS (x, y)
 
-        # Projected (x,y) -> pixel indices (row, col)
-        pixel_rows, pixel_cols = ds.index(xs, ys)
+        xs =np.asarray(xs, dtype=np.float64) # ensure numpy array of floats
+        ys = np.asarray(ys, dtype=np.float64) # ensure numpy array of floats
 
-    pixel_rows = np.asarray(pixel_rows) # convert to numpy array of ints
-    pixel_cols = np.asarray(pixel_cols) # convert to numpy array of ints
+        inv_transform = ~ds.transform # inverse of the DEM's pixel transform for converting from DEM CRS coordinates to pixel space (projected x,y  ->  pixel col,row)
+        pixel_cols, pixel_rows = inv_transform * (xs, ys) # convert from DEM CRS coordinates to pixel space (col, row)
+
+    pixel_rows = np.floor(pixel_rows).astype(int) # convert to numpy array of ints
+    pixel_cols = np.floor(pixel_cols).astype(int) # convert to numpy array of ints
 
     # ---- Filter to ROI ----
     row_start, row_end, col_start, col_end = roi_pixels # unpack ROI bounds in full DEM pixel space
