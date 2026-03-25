@@ -295,8 +295,8 @@ def build_crater_products_from_catalogue(
         inv_transform = ~ds.transform # inverse of the DEM's pixel transform for converting from DEM CRS coordinates to pixel space (projected x,y  ->  pixel col,row)
         pixel_cols, pixel_rows = inv_transform * (xs, ys) # convert from DEM CRS coordinates to pixel space (col, row)
 
-    pixel_rows = np.floor(pixel_rows).astype(int) # convert to numpy array of ints
-    pixel_cols = np.floor(pixel_cols).astype(int) # convert to numpy array of ints
+        pixel_rows = np.floor(pixel_rows).astype(int) # convert to numpy array of ints
+        pixel_cols = np.floor(pixel_cols).astype(int) # convert to numpy array of ints
 
     # ---- Filter to ROI ----
     row_start, row_end, col_start, col_end = roi_pixels # unpack ROI bounds in full DEM pixel space
