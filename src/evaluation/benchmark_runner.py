@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field # for future extensibility, e.g. adding more cost model parameters or pathfinder settings
 from pathlib import Path # for clean path handling
-from typing import Any, Dict, List, Tuple, Optional # for type hints, e.g. case dict structure, benchmark results, etc.
+from typing import Any, Dict, List, Required, Tuple, Optional # for type hints, e.g. case dict structure, benchmark results, etc.
 
 import numpy as np
 
@@ -76,26 +76,52 @@ class BenchmarkCase:
             notes=d.get("notes"),
         )
 
+@dataclass
+class HazardModelSpec:
+    """Specifies a hazard model variant to test.
+    kind:
+    - terrain_only
+    -terrain_plus_crater
+    -precomputed_hazard
+
+    params:
+    FREE - form dict for model specific settrings
+
+    """
+    model_id: str  # e.g. "terrain_only_v1", "terrain_plus_crater_v1", "precomputed_hazard_v1"
+    kind: str  # e.g. "terrain_only", "terrain_plus_crater", "precomputed_hazard"
+    params: Dict[str, Any] = field(default_factory=dict)  # model-specific parameters, e.g. crater_weight for terrain_plus_crater
+
+
+# ==================
+# BenchmarkRunner
+# ==================
+
 
 class BenchmarkRunner:
     """
-    Executes a benchmark suite for a given tile+ROI.
+    Multi-case, multi-model benchmark runner for Endymion.
 
-    Expects derived rasters to already exist:
-      dem_m.npy, slope_deg.npy, roughness_rms.npy + meta.json
+    Strategy
+    --------
+    1) Load derived rasters once for the tile+ROI.
+    2) Build each hazard model once.
+    3) Run all benchmark cases against each model.
+    4) Save one run directory per (case, model).
+    5) Aggregate into summary.json + summary.csv.
     """
 
     def __init__(self, dh: DataHandler, cfg: BenchmarkConfig):
         self.dh = dh
         self.cfg = cfg
 
-        self.hazard_assessor = HazardAssessor()
         self.pathfinder = Pathfinder(
             connectivity=cfg.connectivity,
             block_cost=cfg.block_cost,
             heuristic_weight=cfg.heuristic_weight,
         )
 
+    # directory helpers to keep outputs organized by benchmark_id, case_id, and hazard_model_id
     def _benchmark_root(self) -> Path:
         """Root directory where all benchmark results for this ROI live."""
         return self.dh.derived_dir(self.cfg.tile_id, self.cfg.roi) / "benchmarks" / self.cfg.benchmark_id
@@ -103,6 +129,23 @@ class BenchmarkRunner:
     def _case_dir(self, case_id: str, hazard_model_id: str) -> Path:
         """Directory for one case and one hazard model variant."""
         return self._benchmark_root() / case_id / hazard_model_id
+    
+    # input loadinf
+
+    def _load_base_inputs(self) -> Dict[str, np.ndarray]:
+        """Loads the base rasters needed for hazard assessment and pathfinding."""
+        derived = self.dh.load_derived(self.cfg.tile_id, self.cfg.roi)
+        if derived is None:
+            raise RuntimeError(
+                "Derived rasters not found. Run the pipeline once to generate "
+                "dem_m, slope_deg, roughness_rms in the derived cache."
+            )
+        required = ["dem_m", "slope_deg", "roughness_rms"]
+        missing = [k for k in required if k not in derived]
+        if missing:
+            raise RuntimeError(f"Missing required rasters: {missing}")
+        return derived
+
 
     def run_case(self, case: Dict[str, Any], hazard_model_id: str = "terrain_weighted_v1") -> Dict[str, Any]:
         """Runs one start/goal pair and saves artifacts."""
