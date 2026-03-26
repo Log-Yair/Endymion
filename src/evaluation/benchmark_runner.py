@@ -1,16 +1,27 @@
 # -*- coding: utf-8 -*-
 """
 BenchmarkRunner for Endymion
-
-Runs a fixed benchmark suite (start/goal pairs) against one or more hazard models.
+# - Redesign based on your current BenchmarkRunner, Evaluator, HazardAssessor,
+#   Pathfinder, DataHandler, and crater integration direction in Endymion.
+# - Keeps compatibility with the existing per-run Evaluator contract:
+#   hazard.npy, cost.npy, path_rc.npy, nav_meta.json -> metrics.json
+# - Main design change:
+#   benchmark_runner now supports:
+#       1) multiple benchmark cases
+#       2) multiple hazard model variants
+#       3) benchmark-level summary aggregation
+# - Idea source:
+#   your current benchmark_runner.py only labels hazard_model_id in outputs,
+#   but still always calls the same HazardAssessor internally.
+#   This version turns hazard_model_id into an actual model registry.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from dataclasses import dataclass, field # for future extensibility, e.g. adding more cost model parameters or pathfinder settings
+from pathlib import Path # for clean path handling
+from typing import Any, Dict, List, Tuple, Optional # for type hints, e.g. case dict structure, benchmark results, etc.
 
 import numpy as np
 
@@ -23,13 +34,16 @@ from src.evaluation.evaluator import Evaluator
 
 RC = Tuple[int, int]
 
+# ==================
+# Dataclasses
+# ==================
 
 @dataclass
 class BenchmarkConfig:
     """Fixed settings to keep comparisons fair across hazard model versions."""
     tile_id: str
     roi: ROI
-    benchmark_id: str = "benchmark_v1"
+    benchmark_id: str = "benchmark_v2"  # allows multiple benchmark suites to coexist without overwriting each other
     pixel_size_m: float = 20.0
 
     # Cost model (keep fixed for fairness)
@@ -41,6 +55,26 @@ class BenchmarkConfig:
     connectivity: int = 8
     heuristic_weight: float = 2.0
     corridor_radii: Tuple[int, ...] = (25, 50, 80, 120, 180, 260, 400)
+
+@dataclass
+class BenchmarkCase:
+    """Represents one start/goal pair and its metadata."""
+    case_id: str
+    start_rc: RC
+    goal_rc: RC
+    tier : str = "default"  # optional tier for categorizing cases by difficulty or other criteria
+    notes: Optional[str] = None  # optional free-form notes about the case
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any], tier: str = "default") -> BenchmarkCase:
+        """Helper to create a BenchmarkCase from a dict, e.g. loaded from JSON."""
+        return cls(
+            case_id=d["id"],
+            start_rc=tuple(d["start_rc"]),
+            goal_rc=tuple(d["goal_rc"]),
+            tier=tier,
+            notes=d.get("notes"),
+        )
 
 
 class BenchmarkRunner:
