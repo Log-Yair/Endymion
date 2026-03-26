@@ -18,9 +18,11 @@ BenchmarkRunner for Endymion
 
 from __future__ import annotations
 
+from curses import meta
 import json
 from dataclasses import dataclass, field # for future extensibility, e.g. adding more cost model parameters or pathfinder settings
 from pathlib import Path # for clean path handling
+import re
 from typing import Any, Dict, List, Required, Tuple, Optional # for type hints, e.g. case dict structure, benchmark results, etc.
 
 import numpy as np
@@ -130,7 +132,7 @@ class BenchmarkRunner:
         """Directory for one case and one hazard model variant."""
         return self._benchmark_root() / case_id / hazard_model_id
     
-    # input loadinf
+    # input loading
 
     def _load_base_inputs(self) -> Dict[str, np.ndarray]:
         """Loads the base rasters needed for hazard assessment and pathfinding."""
@@ -145,6 +147,71 @@ class BenchmarkRunner:
         if missing:
             raise RuntimeError(f"Missing required rasters: {missing}")
         return derived
+    
+    def _build_hazard_for_model(
+        self,
+        model: HazardModelSpec,
+        base: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Build hazard map and metadata for one model variant.
+        """
+        dem_m = base["dem_m"]
+        slope_deg = base["slope_deg"]
+        roughness_rms = base["roughness_rms"]
+
+        if model.kind == "terrain_only":
+            assesor = HazardAssessor(
+                slope_deg_max = model.params.get("slope_deg_max", 34.55),  # default to current value
+                roughness_rms_max = model.params.get("roughness_rms_max", 18.56),  # default to current value
+                w_slope= model.params.get("w_slope", 0.5),  # default to equal weighting
+                w_roughness= model.params.get("w_roughness", 0.5),  # default to equal weighting
+                use_impassable_mask= model.params.get("use_impassable_mask", True),  # default to using the mask
+                impassable_slope_deg= model.params.get("impassable_slope_deg", 40.0),  # default to current value
+
+            )
+
+            out = assesor.assess(slope_deg=slope_deg, roughness_rms=roughness_rms, dem_m=dem_m)
+
+            meta = dict(out["meta"])
+            meta["model"] = model.model_id
+            meta["benchmark_model_kind"] = model.kind
+
+            return {
+                "hazard": out["hazard"],
+                "components": out.get("components", {}),  # in case the assessor provides component maps for analysis
+                "hazard_meta": meta,
+            }
+        elif model.kind == "terrain_plus_crater":
+            """
+            Expected crater products already aligned to ROI.
+            Minimal prototype combination:
+                crater_term = w_crater_density * density_norm
+                            + w_crater_distance * (1 - distance_norm)
+            then combine with terrain hazard.
+            """
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
     def run_case(self, case: Dict[str, Any], hazard_model_id: str = "terrain_weighted_v1") -> Dict[str, Any]:
@@ -166,7 +233,7 @@ class BenchmarkRunner:
 
         haz_out = self.hazard_assessor.assess(slope_deg=slope_deg, roughness_rms=roughness_rms, dem_m=dem_m)
         hazard = haz_out["hazard"]
-        hazard_meta = haz_out["meta"]
+        hazard_meta = haz_out["hazard_meta"]
 
         cost = build_cost_from_hazard(
             hazard,
