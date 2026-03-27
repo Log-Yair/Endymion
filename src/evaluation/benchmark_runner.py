@@ -368,7 +368,15 @@ class BenchmarkRunner:
         best_radius = corr.get("best_radius_px") # the radius of the corridor that produced the best path, or None if no path found
         experiment = corr.get("experiment", []) # detailed info about the pathfinding experiment, e.g. which corridors were tried, how many nodes expanded in each, etc.
 
+        success = bool(best and best.get("success", False)) # whether a successful path was found in any corridor
+        path_rc = (
+            np.asarray(best["path_rc"], dtype=np.int32) 
+            if success 
+            else np.zeros((0, 2), dtype=np.int32)
+        )
+
         
+
     
 
 
