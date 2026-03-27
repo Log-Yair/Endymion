@@ -210,7 +210,7 @@ class Pathfinder:
         return {
             "success": False,
             "path_rc": [],
-            "total_cost": Optional[float](None),
+            "total_cost": None,
             "meta": {"reason": "no_path", "expansions": expansions},
         }
 
