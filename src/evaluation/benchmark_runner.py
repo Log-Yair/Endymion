@@ -10,6 +10,8 @@ BenchmarkRunner for Endymion
 #       1) multiple benchmark cases
 #       2) multiple hazard model variants
 #       3) benchmark-level summary aggregation
+# - csv is required as to write the sumarry file, which is written as a csv
+# - math is used to detect non-finite plain python floats 
 # - Idea source:
 #   your current benchmark_runner.py only labels hazard_model_id in outputs,
 #   but still always calls the same HazardAssessor internally.
@@ -21,6 +23,8 @@ from __future__ import annotations
 
 import csv
 import json
+from logging import root
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -121,6 +125,35 @@ class BenchmarkRunner:
 
     def _case_dir(self, case_id: str, model_id: str) -> Path:
         return self._benchmark_root() / case_id / model_id
+    
+    # JSON safety helper to ensure all values are JSON serializable, converting NaNs to None and numpy types to native Python types.
+    def _json_safe(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(k): self._json_safe(v) for k, v in value.items()}
+
+        if isinstance(value, (list, tuple)):
+            return [self._json_safe(v) for v in value]
+
+        if isinstance(value, np.ndarray):
+            return {
+                "_type": "ndarray",
+                "shape": list(value.shape),
+                "dtype": str(value.dtype),
+            }
+
+        if isinstance(value, (np.integer,)):
+            return int(value)
+
+        if isinstance(value, (np.floating,)):
+            return float(value) if np.isfinite(value) else None
+
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+
+        if isinstance(value, (np.bool_,)):
+            return bool(value)
+
+        return value
 
     # ------------------------------------------------------------------
     # Base loading
@@ -502,7 +535,7 @@ class BenchmarkRunner:
             },
         }
 
-        (out_dir / "nav_meta.json").write_text(json.dumps(_json_safe(nav_meta), indent=2, allow_nan=False)) # Ensure all values are JSON serializable, converting NaNs to None and numpy types to native Python types.
+        (out_dir / "nav_meta.json").write_text(json.dumps(self._json_safe(nav_meta), indent=2, allow_nan=False)) # Ensure all values are JSON serializable, converting NaNs to None and numpy types to native Python types.
 
         evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m)
         metrics_path = evaluator.save("metrics.json")
@@ -615,8 +648,8 @@ class BenchmarkRunner:
             "rows": flat_rows,
         }
 
-        (root / "manifest.json").write_text(json.dumps(safe_manifest, indent=2, allow_nan=False))
-        (root / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
+        (root / "manifest.json").write_text(json.dumps(self._json_safe(manifest), indent=2, allow_nan=False))
+        (root / "summary.json").write_text(json.dumps(self._json_safe(summary), indent=2, allow_nan=False))
 
         if flat_rows:
             fieldnames = list(flat_rows[0].keys())
@@ -681,6 +714,7 @@ class BenchmarkRunner:
                 }
                 for m in hazard_models
             ],
+
             "fixed_settings": {
                 "alpha": self.cfg.alpha,
                 "hazard_block": self.cfg.hazard_block,
