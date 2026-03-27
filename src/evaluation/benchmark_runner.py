@@ -190,6 +190,145 @@ class BenchmarkRunner:
                             + w_crater_distance * (1 - distance_norm)
             then combine with terrain hazard.
             """
+            crater_density = np.asarray(
+                model.params["crater_density"], dtype=np.float32
+            )
+            crater_distance_m = np.asarray(
+                model.params["crater_distance_m"], dtype=np.float32
+            )
+
+            if crater_density.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: crater_density shape {crater_density.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
+            if crater_distance_m.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: crater_distance_m shape {crater_distance_m.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
+            
+            # Assess terrain hazard first since crater-based hazard will be fused on top of it and may need to be masked by impassable terrain
+
+            terrain_assessor = HazardAssessor(
+                slope_deg_max=model.params.get("slope_deg_max", 34.55),
+                roughness_rms_max=model.params.get("roughness_rms_max", 18.56),
+                w_slope=model.params.get("w_slope", 0.7),
+                w_roughness=model.params.get("w_roughness", 0.3),
+                use_impassable_mask=model.params.get("use_impassable_mask", True),
+                impassable_slope_deg=model.params.get("impassable_slope_deg", 40.0),
+            )
+
+            # Assess terrain hazard first since crater-based hazard will be fused on top of it and may need to be masked by impassable terrain
+            terrain_out = terrain_assessor.assess(
+                slope_deg=slope_deg,
+                roughness_rms=roughness_rms,
+                dem_m=dem_m,
+            )
+            terrain_hazard = terrain_out["hazard"].astype(np.float32, copy=False) # ensure float32 for fusion and output
+
+            # crater_density is already ~[0,1] in the current crater_raster design
+            density_n = np.clip(crater_density, 0.0, 1.0)
+
+            max_distance_m = float(model.params.get("max_distance_m", 1000.0)) # max distance for normalization, default to 1km which is a common scale for crater influence, but should be set based on the actual crater_distance_m values provided to avoid excessive clipping
+            if max_distance_m <= 0:
+                raise ValueError("max_distance_m must be > 0 for terrain_plus_crater.")
+            distance_n = np.clip(crater_distance_m / max_distance_m, 0.0, 1.0) # normalize distance to [0,1] where 0 is at the crater and 1 is at or beyond max_distance_m
+            proximity_n = 1.0 - distance_n
+
+            w_density = float(model.params.get("w_crater_density", 0.5))
+            w_proximity = float(model.params.get("w_crater_proximity", 0.5))
+            crater_term = (w_density * density_n + w_proximity * proximity_n).astype(
+                np.float32
+            )
+
+            w_terrain = float(model.params.get("w_terrain", 0.8)) # terrain weight in final fusion, default to 0.8 to keep terrain as the primary driver of hazard while allowing crater information to modulate it
+            w_crater = float(model.params.get("w_crater", 0.2)) # crater weight in final fusion, default to 0.2 to allow crater information to modulate terrain hazard without overwhelming it, but should be set based on the expected reliability and importance of the crater products relative to the terrain products
+
+            hazard = np.clip(
+                w_terrain * terrain_hazard + w_crater * crater_term,
+                0.0,
+                1.0,
+            ).astype(np.float32)
+
+            # use impassable mask based on slope_deg to set hazard=1 for any terrain above the impassable_slope_deg, since those areas should be avoided at all costs regardless of crater information. this also ensures that if the crater products have any issues (e.g. missing data, misalignment) the model will still produce a safe output by relying on the terrain-based hazard and the impassable mask.
+            if model.params.get("use_impassable_mask", True):
+                impassable_slope_deg = float(model.params.get("impassable_slope_deg", 40.0))
+                hazard[slope_deg > impassable_slope_deg] = 1.0
+
+            meta = {
+                "model": model.model_id,
+                "benchmark_model_kind": model.kind,
+                "terrain_component": terrain_out["meta"],
+                "crater_component": {
+                    "w_crater_density": w_density,
+                    "w_crater_proximity": w_proximity,
+                    "max_distance_m": max_distance_m,
+                    "density_stats": {
+                        "min": float(np.nanmin(density_n)),
+                        "max": float(np.nanmax(density_n)),
+                        "mean": float(np.nanmean(density_n)),
+                    },
+                    "proximity_stats": {
+                        "min": float(np.nanmin(proximity_n)),
+                        "max": float(np.nanmax(proximity_n)),
+                        "mean": float(np.nanmean(proximity_n)),
+                    },
+                },
+                "fusion": {
+                    "w_terrain": w_terrain,
+                    "w_crater": w_crater,
+                },
+                "stats": {
+                    "hazard_min": float(np.nanmin(hazard)),
+                    "hazard_max": float(np.nanmax(hazard)),
+                    "hazard_mean": float(np.nanmean(hazard)),
+                    "nan_ratio": float(np.isnan(hazard).mean()),
+                },
+            }
+
+            return {
+                "hazard": hazard,
+                "components": {
+                    "terrain_hazard": terrain_hazard,
+                    "crater_density_norm": density_n,
+                    "crater_proximity_norm": proximity_n,
+                    "crater_term": crater_term,
+                },
+                "hazard_meta": meta,
+            }
+
+        elif model.kind == "precomputed_hazard":
+            hazard = np.asarray(model.params["hazard"], dtype=np.float32)
+            if hazard.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: precomputed hazard shape {hazard.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
+
+            # meta data about the hazard map itself. i don't want to bake the model-specific parameters into the meta since they can be arbitrary and may not be relevant for all model kinds, but we still want to capture some basic stats about the hazard map for analysis and debugging
+            meta = {
+                "model": model.model_id,
+                "benchmark_model_kind": model.kind,
+                "stats": {
+                    "hazard_min": float(np.nanmin(hazard)),
+                    "hazard_max": float(np.nanmax(hazard)),
+                    "hazard_mean": float(np.nanmean(hazard)),
+                    "nan_ratio": float(np.isnan(hazard).mean()),
+                },
+            }
+
+            
+            # return hazard with minimal metadata since it's precomputed and i don
+            return {
+                "hazard": hazard,
+                "components": {},
+                "hazard_meta": meta,
+            }
+        # potentially add more model kinds in the future, e.g. "ml_based_hazard" where the hazard is produced by a machine learning model that takes the base rasters as input
+
+        else:
+            raise ValueError(f"Unknown hazard model kind: {model.kind}")
 
 
 
