@@ -442,6 +442,24 @@ class BenchmarkRunner:
         np.save(out_dir / "cost.npy", cost.astype(np.float32, copy=False))
         np.save(out_dir / "path_rc.npy", path_rc)
 
+        # When writing nav_meta.json, ensure all values are JSON serializable.
+        def _json_safe(value):
+            import numpy as np
+
+            if isinstance(value, dict):
+                return {k: _json_safe(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_json_safe(v) for v in value]
+            if isinstance(value, tuple):
+                return [_json_safe(v) for v in value]
+            if isinstance(value, (np.floating, float)):
+                return float(value) if np.isfinite(value) else None
+            if isinstance(value, (np.integer, int)):
+                return int(value)
+            if isinstance(value, (np.bool_, bool)):
+                return bool(value)
+            return value
+
         nav_meta = {
             "tile_id": self.cfg.tile_id,
             "roi": list(self.cfg.roi),
@@ -484,7 +502,7 @@ class BenchmarkRunner:
             },
         }
 
-        (out_dir / "nav_meta.json").write_text(json.dumps(nav_meta, indent=2, allow_nan=False))
+        (out_dir / "nav_meta.json").write_text(json.dumps(_json_safe(nav_meta), indent=2, allow_nan=False)) # Ensure all values are JSON serializable, converting NaNs to None and numpy types to native Python types.
 
         evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m)
         metrics_path = evaluator.save("metrics.json")
