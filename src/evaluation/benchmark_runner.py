@@ -369,13 +369,85 @@ class BenchmarkRunner:
         experiment = corr.get("experiment", []) # detailed info about the pathfinding experiment, e.g. which corridors were tried, how many nodes expanded in each, etc.
 
         success = bool(best and best.get("success", False)) # whether a successful path was found in any corridor
+        
+        # convert path rc to int32 and ensure it's an array, even if no path found (shape (0,2)), to keep the output format consistent for the evaluator and downstream analysis. if no path found, save an empty array for path_rc to indicate that explicitly, rather than leaving it as None or missing, which could complicate the evaluator code that expects a path_rc.npy file
         path_rc = (
             np.asarray(best["path_rc"], dtype=np.int32) 
             if success 
             else np.zeros((0, 2), dtype=np.int32)
         )
 
-        
+        out_dir = self._case_dir(case.case_id, model.model_id) # directory for this case and model variant
+        out_dir.mkdir(parents=True, exist_ok=True) # ensure the directory exists before saving outputs
+ 
+        np.save(out_dir / "hazard.npy", hazard.astype(np.float32, copy=False)) # save hazard ad float32 to `save space and ensure consistent dtype for the evaluator, even if the original hazard was in a different dtype`
+        np.save(out_dir / "cost.npy", cost.astype(np.float32, copy=False)) #cost is also saved as a float33 for comsistency and to save space, even if the original cost array was in a different dtype
+        np.save(out_dir / "path_rc.npy", path_rc) # save path_rc 
+
+        nav_meta = {
+            "tile_id": self.cfg.tile_id,
+            "roi": list(self.cfg.roi),
+            "shape": list(hazard.shape),
+            "run_name": f"{self.cfg.benchmark_id}/{case.case_id}/{model.model_id}",
+            "products": ["hazard", "cost", "path_rc"],
+            "nav_meta": {
+                "start_rc": list(case.start_rc),
+                "goal_rc": list(case.goal_rc),
+                "hazard_assessor": hazard_meta,
+                "cost_model": {
+                    "alpha": self.cfg.alpha,
+                    "hazard_block": self.cfg.hazard_block,
+                    "block_cost": self.cfg.block_cost,
+                },
+                "pathfinder": {
+                    "connectivity": self.cfg.connectivity,
+                    "heuristic_weight": self.cfg.heuristic_weight,
+                    "corridor_radii": list(self.cfg.corridor_radii),
+                    "corridor_radius_px_used": best_radius,
+                },
+                "result": {
+                    "success": success,
+                    "total_cost": float(best["total_cost"]) if success else None,
+                    "path_len": int(path_rc.shape[0]),
+                    "expansions": int((best.get("meta") or {}).get("expansions", -1))
+                    if best is not None
+                    else -1,
+                    "failure_reason": None if success else "no_path_found_in_any_corridor",
+                },
+                "benchmark": {
+                    "benchmark_id": self.cfg.benchmark_id,
+                    "case_id": case.case_id,
+                    "tier": case.tier,
+                    "hazard_model_id": model.model_id,
+                    "hazard_model_kind": model.kind,
+                    "case_notes": case.notes,
+                },
+                "corridor_experiment": experiment,
+            },
+        }
+
+        (out_dir / "nav_meta.json").write_text(
+            json.dumps(nav_meta, indent=2, allow_nan=False)
+        )
+
+        evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m) 
+        metrics_path = evaluator.save("metrics.json")
+        metrics = json.loads(metrics_path.read_text())
+
+        return {
+            "case_id": case.case_id,
+            "tier": case.tier,
+            "hazard_model_id": model.model_id,
+            "hazard_model_kind": model.kind,
+            "success": success,
+            "out_dir": str(out_dir),
+            "metrics": metrics,
+        }
+
+
+
+
+
 
     
 
