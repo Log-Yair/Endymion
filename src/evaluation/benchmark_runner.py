@@ -22,6 +22,7 @@ from curses import meta
 import json
 from dataclasses import dataclass, field # for future extensibility, e.g. adding more cost model parameters or pathfinder settings
 from pathlib import Path # for clean path handling
+from pickle import BUILD
 import re
 from typing import Any, Dict, List, Required, Tuple, Optional # for type hints, e.g. case dict structure, benchmark results, etc.
 
@@ -30,6 +31,7 @@ import numpy as np
 # Refactored imports after repository structure cleanup
 
 from src.data.data_handler import DataHandler, ROI
+from src.models import hazard_assessor
 from src.models.hazard_assessor import HazardAssessor
 from src.planning.pathfinder import Pathfinder, build_cost_from_hazard
 from src.evaluation.evaluator import Evaluator
@@ -329,6 +331,46 @@ class BenchmarkRunner:
 
         else:
             raise ValueError(f"Unknown hazard model kind: {model.kind}")
+
+    # ===============
+    # Running cases
+    # ===============
+
+    def run_case_model(
+            self,
+            case: BenchmarkCase,
+            model: HazardModelSpec,
+            model_output: Dict[str, Any],
+        ) -> Dict[str, Any]:
+
+        ''' run one benchmark case against one that has been built by _build_hazard_for_model, to separate the hazard construction from the pathfinding and evaluation, and allow for more flexible experimentation and debugging. '''
+
+        hazard = model_output["hazard"]
+        hazard_meta = model_output["hazard_meta"]
+
+        cost = build_cost_from_hazard(
+            hazard,
+            alpha=self.cfg.alpha,
+            hazard_block=self.cfg.hazard_block,
+            block_cost=self.cfg.block_cost,
+        )
+
+        # corridor search using the settings from the becnahmark config, which should be fixed across all models for a given benchmark suite to ensure fair comparisons. the corridor search will still adaptively find the best radius for each case, but the set of candidate radii and other pathfinder settings will be the same for all models.
+        corr = self.pathfinder.find_path_corridor(
+            cost=cost,
+            start=case.start_rc,
+            goal=case.goal_rc,
+            corridor_radii=self.cfg.corridor_radii,
+            hazard=hazard,
+        )
+
+        best = corr.get("best") # best path found across all corridors, or None if no path found
+        best_radius = corr.get("best_radius_px") # the radius of the corridor that produced the best path, or None if no path found
+        experiment = corr.get("experiment", []) # detailed info about the pathfinding experiment, e.g. which corridors were tried, how many nodes expanded in each, etc.
+
+        
+    
+
 
 
 
