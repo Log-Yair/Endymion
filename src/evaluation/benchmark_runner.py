@@ -443,25 +443,229 @@ class BenchmarkRunner:
             "out_dir": str(out_dir),
             "metrics": metrics,
         }
-
-
-
-
-
-
     
+    # ------------------------------------------------------------------
+    # Aggregation
+    # ------------------------------------------------------------------
+
+    ''' The following methods are meant to aggregate and summarize the results across all cases and models after they have been run, to produce summary files that can be easily analyzed and compared. The _flatten_result_row method extracts the most relevant fields from the raw results into a flat structure that can be easily saved as CSV or JSON, while the _build_model_summary method aggregates those flat rows by hazard model to produce summary statistics like success rate, mean path length, mean hazard, etc. The _write_summary_files method then saves both the flat rows and the model summary to disk in a structured way under the benchmark root directory.'''
+    @staticmethod
+    def _flatten_result_row(result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Extract the most useful fields into one flat summary row.
+        """
+        metrics = result["metrics"]
+
+        row = {
+            "case_id": result["case_id"],
+            "tier": result["tier"],
+            "hazard_model_id": result["hazard_model_id"],
+            "hazard_model_kind": result["hazard_model_kind"],
+            "success": metrics["status"]["success"],
+            "failure_reason": metrics["status"]["failure_reason"],
+
+            "path_nodes": metrics["geometry"]["path_nodes"],
+            "path_length_m": metrics["geometry"]["path_length_m"],
+            "straight_line_m": metrics["geometry"]["straight_line_m"],
+            "detour_ratio": metrics["geometry"]["detour_ratio"],
+            "turn_count": metrics["geometry"]["turn_count"],
+            "turns_per_m": metrics["geometry"]["turns_per_m"],
+
+            "path_hazard_mean": metrics["safety"]["path_hazard_mean"],
+            "path_hazard_max": metrics["safety"]["path_hazard_max"],
+            "path_hazard_p95": metrics["safety"]["path_hazard_p95"],
+            "haz_per_m": metrics["safety"]["haz_per_m"],
+            "frac_hazard_ge_block": metrics["safety"]["frac_hazard_ge_block"],
+            "hazard_mean_ratio": metrics["safety"]["hazard_mean_ratio"],
+            "safety_score": metrics["safety"]["safety_score"],
+
+            "cost_sum_along_path": metrics["efficiency"]["cost_sum_along_path"],
+            "cost_per_m": metrics["efficiency"]["cost_per_m"],
+            "planner_total_cost": metrics["efficiency"]["planner_total_cost"],
+            "expansions": metrics["efficiency"]["expansions"],
+        }
+        return row
+
+    ''' helper to compute mean while ignoring None values, since some metrics may be None for failed cases or if the pathfinding didn't produce a valid path, and we don't want those to skew the mean calculations in the model summary. This will return None if all values are None, which can be handled in the summary output to indicate that the metric is not applicable or not available for that model.'''
+    @staticmethod
+    def _mean_ignore_none(values: List[Any]) -> Optional[float]:
+        vals = [float(v) for v in values if v is not None]
+        if not vals:
+            return None
+        return float(np.mean(vals))
+
+    ''' build a model summary that aggregates results across all cases for each hazard model, to provide an overall picture of how each model performed on the benchmark suite. This will compute statistics like success rate, mean path length, mean hazard, mean cost per meter, mean expansions, etc. for each hazard model, and return a list of summary dicts that can be easily saved as JSON or CSV. The summary can then be used to compare the different hazard models and identify which ones performed better overall on the benchmark cases.'''
+    def _build_model_summary(self, flat_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Aggregate summary per hazard model across all cases.
+        """
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for row in flat_rows:
+            grouped.setdefault(row["hazard_model_id"], []).append(row)
+
+        summary = [] # one summary row per hazard model, aggregating across all cases
+        for model_id, rows in grouped.items():
+            summary.append({
+                "hazard_model_id": model_id,
+                "hazard_model_kind": rows[0]["hazard_model_kind"],
+                "num_cases": len(rows),
+                "num_success": int(sum(bool(r["success"]) for r in rows)),
+                "success_rate": float(np.mean([bool(r["success"]) for r in rows])) if rows else None,
+                "mean_path_length_m": self._mean_ignore_none([r["path_length_m"] for r in rows]),
+                "mean_path_hazard_mean": self._mean_ignore_none([r["path_hazard_mean"] for r in rows]),
+                "mean_path_hazard_max": self._mean_ignore_none([r["path_hazard_max"] for r in rows]),
+                "mean_safety_score": self._mean_ignore_none([r["safety_score"] for r in rows]),
+                "mean_cost_per_m": self._mean_ignore_none([r["cost_per_m"] for r in rows]),
+                "mean_expansions": self._mean_ignore_none([r["expansions"] for r in rows]),
+            })
+        return summary
+
+    def _write_summary_files(self, results: List[Dict[str, Any]], manifest: Dict[str, Any]) -> Dict[str, Any]:
+        root = self._benchmark_root()
+        root.mkdir(parents=True, exist_ok=True)
+
+        flat_rows = [self._flatten_result_row(r) for r in results]
+        model_summary = self._build_model_summary(flat_rows)
+
+        summary = {
+            "benchmark_manifest": manifest,
+            "model_summary": model_summary,
+            "rows": flat_rows,
+        }
+
+        (root / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False))
+        (root / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
+
+        if flat_rows:
+            fieldnames = list(flat_rows[0].keys())
+            with open(root / "summary.csv", "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(flat_rows)
+
+        return summary
+
+    # ------------------------------------------------------------------
+    # Public entrypoints
+    # ------------------------------------------------------------------
+
+    def run(
+        self,
+        cases: List[BenchmarkCase],
+        hazard_models: List[HazardModelSpec],
+    ) -> Dict[str, Any]:
+        """
+        Run all models across all cases.
+        """
+        if not cases:
+            raise ValueError("No benchmark cases provided.")
+        if not hazard_models:
+            raise ValueError("No hazard models provided.")
+
+        base = self._load_base_inputs()
+
+        model_outputs: Dict[str, Dict[str, Any]] = {}
+        for model in hazard_models:
+            model_outputs[model.model_id] = self._build_hazard_for_model(model, base)
+
+        results: List[Dict[str, Any]] = []
+        for case in cases:
+            for model in hazard_models:
+                result = self.run_case_model(
+                    case=case,
+                    model=model,
+                    model_output=model_outputs[model.model_id],
+                )
+                results.append(result)
+
+        manifest = {
+            "benchmark_id": self.cfg.benchmark_id,
+            "tile_id": self.cfg.tile_id,
+            "roi": list(self.cfg.roi),
+            "num_cases": len(cases),
+            "num_models": len(hazard_models),
+            "cases": [
+                {
+                    "case_id": c.case_id,
+                    "tier": c.tier,
+                    "start_rc": list(c.start_rc),
+                    "goal_rc": list(c.goal_rc),
+                    "notes": c.notes,
+                }
+                for c in cases
+            ],
+            "hazard_models": [
+                {
+                    "model_id": m.model_id,
+                    "kind": m.kind,
+                    "params": m.params,
+                }
+                for m in hazard_models
+            ],
+            "fixed_settings": {
+                "alpha": self.cfg.alpha,
+                "hazard_block": self.cfg.hazard_block,
+                "block_cost": self.cfg.block_cost,
+                "connectivity": self.cfg.connectivity,
+                "heuristic_weight": self.cfg.heuristic_weight,
+                "corridor_radii": list(self.cfg.corridor_radii),
+                "pixel_size_m": self.cfg.pixel_size_m,
+            },
+        }
+
+        summary = self._write_summary_files(results, manifest)
+        return {
+            "benchmark_root": str(self._benchmark_root()),
+            "manifest": manifest,
+            "summary": summary,
+            "results": results,
+        }
+
+    def run_benchmark_file(
+        self,
+        benchmark_json_path: str | Path,
+        hazard_models: List[HazardModelSpec],
+    ) -> Dict[str, Any]:
+        """
+        Load benchmark cases from your existing JSON tier format.
+
+        Expected format:
+        {
+          "tile_id": "...",
+          "roi": [r0, r1, c0, c1],
+          "tiers": {
+            "easy": [...],
+            "moderate": [...],
+            "hard": [...]
+          }
+        }
+        """
+        spec = json.loads(Path(benchmark_json_path).read_text())
+
+        if "tile_id" in spec and spec["tile_id"] != self.cfg.tile_id:
+            raise ValueError(
+                f"Benchmark spec tile_id={spec['tile_id']} does not match cfg.tile_id={self.cfg.tile_id}"
+            )
+        if "roi" in spec and tuple(spec["roi"]) != tuple(self.cfg.roi):
+            raise ValueError(
+                f"Benchmark spec roi={spec['roi']} does not match cfg.roi={list(self.cfg.roi)}"
+            )
+
+        cases: List[BenchmarkCase] = []
+        for tier_name, tier_cases in spec["tiers"].items():
+            for case in tier_cases:
+                case = dict(case)
+                case["tier"] = tier_name
+                cases.append(BenchmarkCase.from_dict(case, tier=tier_name))
+
+        return self.run(cases=cases, hazard_models=hazard_models)
 
 
 
 
 
 
-
-
-
-
-
-
+    # 
 
 
 
