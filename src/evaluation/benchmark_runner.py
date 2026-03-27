@@ -16,90 +16,77 @@ BenchmarkRunner for Endymion
 #   This version turns hazard_model_id into an actual model registry.
 """
 
+
 from __future__ import annotations
 
-from curses import meta
+import csv
 import json
-from dataclasses import dataclass, field # for future extensibility, e.g. adding more cost model parameters or pathfinder settings
-from pathlib import Path # for clean path handling
-from pickle import BUILD
-import re
-from typing import Any, Dict, List, Required, Tuple, Optional # for type hints, e.g. case dict structure, benchmark results, etc.
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 
-# Refactored imports after repository structure cleanup
-
 from src.data.data_handler import DataHandler, ROI
-from src.models import hazard_assessor
 from src.models.hazard_assessor import HazardAssessor
 from src.planning.pathfinder import Pathfinder, build_cost_from_hazard
 from src.evaluation.evaluator import Evaluator
 
 RC = Tuple[int, int]
 
-# ==================
-# Dataclasses
-# ==================
 
 @dataclass
 class BenchmarkConfig:
-    """Fixed settings to keep comparisons fair across hazard model versions."""
+    """Fixed settings kept constant across models for fair comparison."""
     tile_id: str
     roi: ROI
-    benchmark_id: str = "benchmark_v2"  # allows multiple benchmark suites to coexist without overwriting each other
+    benchmark_id: str = "benchmark_v2"
     pixel_size_m: float = 20.0
 
-    # Cost model (keep fixed for fairness)
+    # Cost model
     alpha: float = 10.0
     hazard_block: float = 0.95
     block_cost: float = 1e6
 
-    # Pathfinder (keep fixed for fairness)
+    # Pathfinder
     connectivity: int = 8
     heuristic_weight: float = 2.0
     corridor_radii: Tuple[int, ...] = (25, 50, 80, 120, 180, 260, 400)
 
+
 @dataclass
 class BenchmarkCase:
-    """Represents one start/goal pair and its metadata."""
+    """One benchmark start/goal pair plus optional metadata."""
     case_id: str
     start_rc: RC
     goal_rc: RC
-    tier : str = "default"  # optional tier for categorizing cases by difficulty or other criteria
-    notes: Optional[str] = None  # optional free-form notes about the case
+    tier: str = "default"
+    notes: Optional[str] = None
 
     @classmethod
-    def from_dict(cls, d: Dict[str, Any], tier: str = "default") -> BenchmarkCase:
-        """Helper to create a BenchmarkCase from a dict, e.g. loaded from JSON."""
+    def from_dict(cls, d: Dict[str, Any], tier: str = "default") -> "BenchmarkCase":
         return cls(
             case_id=d["id"],
             start_rc=tuple(d["start_rc"]),
             goal_rc=tuple(d["goal_rc"]),
-            tier=tier,
+            tier=d.get("tier", tier),
             notes=d.get("notes"),
         )
 
+
 @dataclass
 class HazardModelSpec:
-    """Specifies a hazard model variant to test.
-    kind:
-    - terrain_only
-    -terrain_plus_crater
-    -precomputed_hazard
-
-    params:
-    FREE - form dict for model specific settrings
-
     """
-    model_id: str  # e.g. "terrain_only_v1", "terrain_plus_crater_v1", "precomputed_hazard_v1"
-    kind: str  # e.g. "terrain_only", "terrain_plus_crater", "precomputed_hazard"
-    params: Dict[str, Any] = field(default_factory=dict)  # model-specific parameters, e.g. crater_weight for terrain_plus_crater
+    Hazard model variant definition.
 
-
-# ==================
-# BenchmarkRunner
-# ==================
+    kind:
+      - terrain_only
+      - terrain_plus_crater
+      - precomputed_hazard
+    """
+    model_id: str
+    kind: str
+    params: Dict[str, Any] = field(default_factory=dict)
 
 
 class BenchmarkRunner:
@@ -108,11 +95,11 @@ class BenchmarkRunner:
 
     Strategy
     --------
-    1) Load derived rasters once for the tile+ROI.
+    1) Load terrain rasters once for the tile+ROI.
     2) Build each hazard model once.
     3) Run all benchmark cases against each model.
     4) Save one run directory per (case, model).
-    5) Aggregate into summary.json + summary.csv.
+    5) Aggregate results into summary.json + summary.csv.
     """
 
     def __init__(self, dh: DataHandler, cfg: BenchmarkConfig):
@@ -125,55 +112,119 @@ class BenchmarkRunner:
             heuristic_weight=cfg.heuristic_weight,
         )
 
-    # directory helpers to keep outputs organized by benchmark_id, case_id, and hazard_model_id
+    # ------------------------------------------------------------------
+    # Directory helpers
+    # ------------------------------------------------------------------
+
     def _benchmark_root(self) -> Path:
-        """Root directory where all benchmark results for this ROI live."""
         return self.dh.derived_dir(self.cfg.tile_id, self.cfg.roi) / "benchmarks" / self.cfg.benchmark_id
 
-    def _case_dir(self, case_id: str, hazard_model_id: str) -> Path:
-        """Directory for one case and one hazard model variant."""
-        return self._benchmark_root() / case_id / hazard_model_id
-    
-    # input loading
+    def _case_dir(self, case_id: str, model_id: str) -> Path:
+        return self._benchmark_root() / case_id / model_id
 
-    def _load_base_inputs(self) -> Dict[str, np.ndarray]:
-        """Loads the base rasters needed for hazard assessment and pathfinding."""
+    # ------------------------------------------------------------------
+    # Base loading
+    # ------------------------------------------------------------------
+
+    def _load_base_inputs(self) -> Dict[str, Any]:
         derived = self.dh.load_derived(self.cfg.tile_id, self.cfg.roi)
         if derived is None:
             raise RuntimeError(
-                "Derived rasters not found. Run the pipeline once to generate "
-                "dem_m, slope_deg, roughness_rms in the derived cache."
+                "Derived rasters not found. Run the pipeline first so the ROI cache "
+                "contains dem_m, slope_deg, and roughness_rms."
             )
+
         required = ["dem_m", "slope_deg", "roughness_rms"]
         missing = [k for k in required if k not in derived]
         if missing:
-            raise RuntimeError(f"Missing required rasters: {missing}")
+            raise RuntimeError(f"Missing required derived rasters: {missing}")
+
         return derived
-    
+
+    def _load_crater_products_from_cache(
+        self,
+        expected_shape: Tuple[int, int],
+        cache_product_name: str = "crater_mask",
+    ) -> Dict[str, Any]:
+        """
+        Load crater products previously cached by CraterPredictor into the ROI derived dir.
+
+        Expected files:
+          crater_mask.npy
+          crater_mask_distance.npy
+          crater_mask_density.npy
+          crater_mask_meta.json
+        """
+        derived_dir = Path(self.dh.derived_dir(self.cfg.tile_id, self.cfg.roi))
+
+        mask_path = derived_dir / f"{cache_product_name}.npy"
+        distance_path = derived_dir / f"{cache_product_name}_distance.npy"
+        density_path = derived_dir / f"{cache_product_name}_density.npy"
+        meta_path = derived_dir / f"{cache_product_name}_meta.json"
+
+        missing = [str(p.name) for p in [mask_path, distance_path, density_path, meta_path] if not p.exists()]
+        if missing:
+            raise FileNotFoundError(
+                "Crater cache not found in the ROI derived directory. Missing: "
+                f"{missing}. Build crater products with CraterPredictor first."
+            )
+
+        crater_mask = np.load(mask_path)
+        crater_distance_m = np.load(distance_path)
+        crater_density = np.load(density_path)
+        crater_meta = json.loads(meta_path.read_text())
+
+        for name, arr in {
+            "crater_mask": crater_mask,
+            "crater_distance_m": crater_distance_m,
+            "crater_density": crater_density,
+        }.items():
+            if arr.shape != expected_shape:
+                raise ValueError(
+                    f"Cached {name} shape {arr.shape} does not match expected ROI shape {expected_shape}."
+                )
+
+        return {
+            "crater_mask": crater_mask.astype(np.uint8, copy=False),
+            "crater_distance_m": crater_distance_m.astype(np.float32, copy=False),
+            "crater_density": crater_density.astype(np.float32, copy=False),
+            "meta": crater_meta,
+            "paths": {
+                "crater_mask": mask_path.name,
+                "crater_distance_m": distance_path.name,
+                "crater_density": density_path.name,
+                "meta": meta_path.name,
+            },
+        }
+
+    # ------------------------------------------------------------------
+    # Hazard builders
+    # ------------------------------------------------------------------
+
     def _build_hazard_for_model(
         self,
         model: HazardModelSpec,
         base: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """
-        Build hazard map and metadata for one model variant.
-        """
         dem_m = base["dem_m"]
         slope_deg = base["slope_deg"]
         roughness_rms = base["roughness_rms"]
 
         if model.kind == "terrain_only":
-            assesor = HazardAssessor(
-                slope_deg_max = model.params.get("slope_deg_max", 34.55),  # default to current value
-                roughness_rms_max = model.params.get("roughness_rms_max", 18.56),  # default to current value
-                w_slope= model.params.get("w_slope", 0.5),  # default to equal weighting
-                w_roughness= model.params.get("w_roughness", 0.5),  # default to equal weighting
-                use_impassable_mask= model.params.get("use_impassable_mask", True),  # default to using the mask
-                impassable_slope_deg= model.params.get("impassable_slope_deg", 40.0),  # default to current value
-
+            assessor = HazardAssessor(
+                slope_deg_max=model.params.get("slope_deg_max", 34.55),
+                roughness_rms_max=model.params.get("roughness_rms_max", 18.56),
+                w_slope=model.params.get("w_slope", 0.7),
+                w_roughness=model.params.get("w_roughness", 0.3),
+                use_impassable_mask=model.params.get("use_impassable_mask", True),
+                impassable_slope_deg=model.params.get("impassable_slope_deg", 40.0),
             )
 
-            out = assesor.assess(slope_deg=slope_deg, roughness_rms=roughness_rms, dem_m=dem_m)
+            out = assessor.assess(
+                slope_deg=slope_deg,
+                roughness_rms=roughness_rms,
+                dem_m=dem_m,
+            )
 
             meta = dict(out["meta"])
             meta["model"] = model.model_id
@@ -181,23 +232,34 @@ class BenchmarkRunner:
 
             return {
                 "hazard": out["hazard"],
-                "components": out.get("components", {}),  # in case the assessor provides component maps for analysis
+                "components": out.get("components", {}),
                 "hazard_meta": meta,
             }
-        elif model.kind == "terrain_plus_crater":
-            """
-            Expected crater products already aligned to ROI.
-            Minimal prototype combination:
-                crater_term = w_crater_density * density_norm
-                            + w_crater_distance * (1 - distance_norm)
-            then combine with terrain hazard.
-            """
-            crater_density = np.asarray(
-                model.params["crater_density"], dtype=np.float32
-            )
-            crater_distance_m = np.asarray(
-                model.params["crater_distance_m"], dtype=np.float32
-            )
+
+        if model.kind == "terrain_plus_crater":
+            crater_density = model.params.get("crater_density")
+            crater_distance_m = model.params.get("crater_distance_m")
+            crater_mask = model.params.get("crater_mask")
+            crater_cache_meta = None
+            crater_cache_paths = None
+
+            if crater_density is None or crater_distance_m is None:
+                cache_product_name = model.params.get("cache_product_name", "crater_mask")
+                crater_cache = self._load_crater_products_from_cache(
+                    expected_shape=slope_deg.shape,
+                    cache_product_name=cache_product_name,
+                )
+                crater_mask = crater_cache["crater_mask"]
+                crater_density = crater_cache["crater_density"]
+                crater_distance_m = crater_cache["crater_distance_m"]
+                crater_cache_meta = crater_cache["meta"]
+                crater_cache_paths = crater_cache["paths"]
+
+            crater_density = np.asarray(crater_density, dtype=np.float32)
+            crater_distance_m = np.asarray(crater_distance_m, dtype=np.float32)
+
+            if crater_mask is not None:
+                crater_mask = np.asarray(crater_mask, dtype=np.uint8)
 
             if crater_density.shape != slope_deg.shape:
                 raise ValueError(
@@ -209,8 +271,11 @@ class BenchmarkRunner:
                     f"{model.model_id}: crater_distance_m shape {crater_distance_m.shape} "
                     f"does not match terrain shape {slope_deg.shape}"
                 )
-            
-            # Assess terrain hazard first since crater-based hazard will be fused on top of it and may need to be masked by impassable terrain
+            if crater_mask is not None and crater_mask.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: crater_mask shape {crater_mask.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
 
             terrain_assessor = HazardAssessor(
                 slope_deg_max=model.params.get("slope_deg_max", 34.55),
@@ -221,31 +286,28 @@ class BenchmarkRunner:
                 impassable_slope_deg=model.params.get("impassable_slope_deg", 40.0),
             )
 
-            # Assess terrain hazard first since crater-based hazard will be fused on top of it and may need to be masked by impassable terrain
             terrain_out = terrain_assessor.assess(
                 slope_deg=slope_deg,
                 roughness_rms=roughness_rms,
                 dem_m=dem_m,
             )
-            terrain_hazard = terrain_out["hazard"].astype(np.float32, copy=False) # ensure float32 for fusion and output
+            terrain_hazard = terrain_out["hazard"].astype(np.float32, copy=False)
 
-            # crater_density is already ~[0,1] in the current crater_raster design
             density_n = np.clip(crater_density, 0.0, 1.0)
 
-            max_distance_m = float(model.params.get("max_distance_m", 1000.0)) # max distance for normalization, default to 1km which is a common scale for crater influence, but should be set based on the actual crater_distance_m values provided to avoid excessive clipping
+            max_distance_m = float(model.params.get("max_distance_m", 1000.0))
             if max_distance_m <= 0:
                 raise ValueError("max_distance_m must be > 0 for terrain_plus_crater.")
-            distance_n = np.clip(crater_distance_m / max_distance_m, 0.0, 1.0) # normalize distance to [0,1] where 0 is at the crater and 1 is at or beyond max_distance_m
+
+            distance_n = np.clip(crater_distance_m / max_distance_m, 0.0, 1.0)
             proximity_n = 1.0 - distance_n
 
             w_density = float(model.params.get("w_crater_density", 0.5))
             w_proximity = float(model.params.get("w_crater_proximity", 0.5))
-            crater_term = (w_density * density_n + w_proximity * proximity_n).astype(
-                np.float32
-            )
+            crater_term = (w_density * density_n + w_proximity * proximity_n).astype(np.float32)
 
-            w_terrain = float(model.params.get("w_terrain", 0.8)) # terrain weight in final fusion, default to 0.8 to keep terrain as the primary driver of hazard while allowing crater information to modulate it
-            w_crater = float(model.params.get("w_crater", 0.2)) # crater weight in final fusion, default to 0.2 to allow crater information to modulate terrain hazard without overwhelming it, but should be set based on the expected reliability and importance of the crater products relative to the terrain products
+            w_terrain = float(model.params.get("w_terrain", 0.8))
+            w_crater = float(model.params.get("w_crater", 0.2))
 
             hazard = np.clip(
                 w_terrain * terrain_hazard + w_crater * crater_term,
@@ -253,7 +315,6 @@ class BenchmarkRunner:
                 1.0,
             ).astype(np.float32)
 
-            # use impassable mask based on slope_deg to set hazard=1 for any terrain above the impassable_slope_deg, since those areas should be avoided at all costs regardless of crater information. this also ensures that if the crater products have any issues (e.g. missing data, misalignment) the model will still produce a safe output by relying on the terrain-based hazard and the impassable mask.
             if model.params.get("use_impassable_mask", True):
                 impassable_slope_deg = float(model.params.get("impassable_slope_deg", 40.0))
                 hazard[slope_deg > impassable_slope_deg] = 1.0
@@ -263,6 +324,10 @@ class BenchmarkRunner:
                 "benchmark_model_kind": model.kind,
                 "terrain_component": terrain_out["meta"],
                 "crater_component": {
+                    "source": "direct_params" if crater_cache_meta is None else "derived_cache",
+                    "cache_product_name": model.params.get("cache_product_name", "crater_mask"),
+                    "cache_products": crater_cache_paths,
+                    "cache_catalogue_meta": crater_cache_meta,
                     "w_crater_density": w_density,
                     "w_crater_proximity": w_proximity,
                     "max_distance_m": max_distance_m,
@@ -289,18 +354,22 @@ class BenchmarkRunner:
                 },
             }
 
+            components = {
+                "terrain_hazard": terrain_hazard,
+                "crater_density_norm": density_n,
+                "crater_proximity_norm": proximity_n,
+                "crater_term": crater_term,
+            }
+            if crater_mask is not None:
+                components["crater_mask"] = crater_mask
+
             return {
                 "hazard": hazard,
-                "components": {
-                    "terrain_hazard": terrain_hazard,
-                    "crater_density_norm": density_n,
-                    "crater_proximity_norm": proximity_n,
-                    "crater_term": crater_term,
-                },
+                "components": components,
                 "hazard_meta": meta,
             }
 
-        elif model.kind == "precomputed_hazard":
+        if model.kind == "precomputed_hazard":
             hazard = np.asarray(model.params["hazard"], dtype=np.float32)
             if hazard.shape != slope_deg.shape:
                 raise ValueError(
@@ -308,7 +377,6 @@ class BenchmarkRunner:
                     f"does not match terrain shape {slope_deg.shape}"
                 )
 
-            # meta data about the hazard map itself. i don't want to bake the model-specific parameters into the meta since they can be arbitrary and may not be relevant for all model kinds, but we still want to capture some basic stats about the hazard map for analysis and debugging
             meta = {
                 "model": model.model_id,
                 "benchmark_model_kind": model.kind,
@@ -320,31 +388,24 @@ class BenchmarkRunner:
                 },
             }
 
-            
-            # return hazard with minimal metadata since it's precomputed and i don
             return {
                 "hazard": hazard,
                 "components": {},
                 "hazard_meta": meta,
             }
-        # potentially add more model kinds in the future, e.g. "ml_based_hazard" where the hazard is produced by a machine learning model that takes the base rasters as input
 
-        else:
-            raise ValueError(f"Unknown hazard model kind: {model.kind}")
+        raise ValueError(f"Unknown hazard model kind: {model.kind}")
 
-    # ===============
-    # Running cases
-    # ===============
+    # ------------------------------------------------------------------
+    # One case x one model
+    # ------------------------------------------------------------------
 
     def run_case_model(
-            self,
-            case: BenchmarkCase,
-            model: HazardModelSpec,
-            model_output: Dict[str, Any],
-        ) -> Dict[str, Any]:
-
-        ''' run one benchmark case against one that has been built by _build_hazard_for_model, to separate the hazard construction from the pathfinding and evaluation, and allow for more flexible experimentation and debugging. '''
-
+        self,
+        case: BenchmarkCase,
+        model: HazardModelSpec,
+        model_output: Dict[str, Any],
+    ) -> Dict[str, Any]:
         hazard = model_output["hazard"]
         hazard_meta = model_output["hazard_meta"]
 
@@ -355,7 +416,6 @@ class BenchmarkRunner:
             block_cost=self.cfg.block_cost,
         )
 
-        # corridor search using the settings from the becnahmark config, which should be fixed across all models for a given benchmark suite to ensure fair comparisons. the corridor search will still adaptively find the best radius for each case, but the set of candidate radii and other pathfinder settings will be the same for all models.
         corr = self.pathfinder.find_path_corridor(
             cost=cost,
             start=case.start_rc,
@@ -364,25 +424,23 @@ class BenchmarkRunner:
             hazard=hazard,
         )
 
-        best = corr.get("best") # best path found across all corridors, or None if no path found
-        best_radius = corr.get("best_radius_px") # the radius of the corridor that produced the best path, or None if no path found
-        experiment = corr.get("experiment", []) # detailed info about the pathfinding experiment, e.g. which corridors were tried, how many nodes expanded in each, etc.
+        best = corr.get("best")
+        best_radius = corr.get("best_radius_px")
+        experiment = corr.get("experiment", [])
 
-        success = bool(best and best.get("success", False)) # whether a successful path was found in any corridor
-        
-        # convert path rc to int32 and ensure it's an array, even if no path found (shape (0,2)), to keep the output format consistent for the evaluator and downstream analysis. if no path found, save an empty array for path_rc to indicate that explicitly, rather than leaving it as None or missing, which could complicate the evaluator code that expects a path_rc.npy file
+        success = bool(best and best.get("success", False))
         path_rc = (
-            np.asarray(best["path_rc"], dtype=np.int32) 
-            if success 
+            np.asarray(best["path_rc"], dtype=np.int32)
+            if success
             else np.zeros((0, 2), dtype=np.int32)
         )
 
-        out_dir = self._case_dir(case.case_id, model.model_id) # directory for this case and model variant
-        out_dir.mkdir(parents=True, exist_ok=True) # ensure the directory exists before saving outputs
- 
-        np.save(out_dir / "hazard.npy", hazard.astype(np.float32, copy=False)) # save hazard ad float32 to `save space and ensure consistent dtype for the evaluator, even if the original hazard was in a different dtype`
-        np.save(out_dir / "cost.npy", cost.astype(np.float32, copy=False)) #cost is also saved as a float33 for comsistency and to save space, even if the original cost array was in a different dtype
-        np.save(out_dir / "path_rc.npy", path_rc) # save path_rc 
+        out_dir = self._case_dir(case.case_id, model.model_id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        np.save(out_dir / "hazard.npy", hazard.astype(np.float32, copy=False))
+        np.save(out_dir / "cost.npy", cost.astype(np.float32, copy=False))
+        np.save(out_dir / "path_rc.npy", path_rc)
 
         nav_meta = {
             "tile_id": self.cfg.tile_id,
@@ -426,11 +484,9 @@ class BenchmarkRunner:
             },
         }
 
-        (out_dir / "nav_meta.json").write_text(
-            json.dumps(nav_meta, indent=2, allow_nan=False)
-        )
+        (out_dir / "nav_meta.json").write_text(json.dumps(nav_meta, indent=2, allow_nan=False))
 
-        evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m) 
+        evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m)
         metrics_path = evaluator.save("metrics.json")
         metrics = json.loads(metrics_path.read_text())
 
@@ -443,20 +499,15 @@ class BenchmarkRunner:
             "out_dir": str(out_dir),
             "metrics": metrics,
         }
-    
+
     # ------------------------------------------------------------------
-    # Aggregation
+    # Summary helpers
     # ------------------------------------------------------------------
 
-    ''' The following methods are meant to aggregate and summarize the results across all cases and models after they have been run, to produce summary files that can be easily analyzed and compared. The _flatten_result_row method extracts the most relevant fields from the raw results into a flat structure that can be easily saved as CSV or JSON, while the _build_model_summary method aggregates those flat rows by hazard model to produce summary statistics like success rate, mean path length, mean hazard, etc. The _write_summary_files method then saves both the flat rows and the model summary to disk in a structured way under the benchmark root directory.'''
     @staticmethod
     def _flatten_result_row(result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Extract the most useful fields into one flat summary row.
-        """
         metrics = result["metrics"]
-
-        row = {
+        return {
             "case_id": result["case_id"],
             "tier": result["tier"],
             "hazard_model_id": result["hazard_model_id"],
@@ -484,9 +535,7 @@ class BenchmarkRunner:
             "planner_total_cost": metrics["efficiency"]["planner_total_cost"],
             "expansions": metrics["efficiency"]["expansions"],
         }
-        return row
 
-    ''' helper to compute mean while ignoring None values, since some metrics may be None for failed cases or if the pathfinding didn't produce a valid path, and we don't want those to skew the mean calculations in the model summary. This will return None if all values are None, which can be handled in the summary output to indicate that the metric is not applicable or not available for that model.'''
     @staticmethod
     def _mean_ignore_none(values: List[Any]) -> Optional[float]:
         vals = [float(v) for v in values if v is not None]
@@ -494,16 +543,12 @@ class BenchmarkRunner:
             return None
         return float(np.mean(vals))
 
-    ''' build a model summary that aggregates results across all cases for each hazard model, to provide an overall picture of how each model performed on the benchmark suite. This will compute statistics like success rate, mean path length, mean hazard, mean cost per meter, mean expansions, etc. for each hazard model, and return a list of summary dicts that can be easily saved as JSON or CSV. The summary can then be used to compare the different hazard models and identify which ones performed better overall on the benchmark cases.'''
     def _build_model_summary(self, flat_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Aggregate summary per hazard model across all cases.
-        """
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for row in flat_rows:
             grouped.setdefault(row["hazard_model_id"], []).append(row)
 
-        summary = [] # one summary row per hazard model, aggregating across all cases
+        summary = []
         for model_id, rows in grouped.items():
             summary.append({
                 "hazard_model_id": model_id,
@@ -520,6 +565,24 @@ class BenchmarkRunner:
             })
         return summary
 
+    def _json_safe(self, obj: Any) -> Any:
+        """Convert numpy arrays and other non-JSON types into safe summaries for manifest writing."""
+        if obj is None or isinstance(obj, (str, int, float, bool)):
+            return obj
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, np.ndarray):
+            return {
+                "type": "ndarray",
+                "shape": list(obj.shape),
+                "dtype": str(obj.dtype),
+            }
+        if isinstance(obj, dict):
+            return {str(k): self._json_safe(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [self._json_safe(v) for v in obj]
+        return str(obj)
+
     def _write_summary_files(self, results: List[Dict[str, Any]], manifest: Dict[str, Any]) -> Dict[str, Any]:
         root = self._benchmark_root()
         root.mkdir(parents=True, exist_ok=True)
@@ -527,13 +590,14 @@ class BenchmarkRunner:
         flat_rows = [self._flatten_result_row(r) for r in results]
         model_summary = self._build_model_summary(flat_rows)
 
+        safe_manifest = self._json_safe(manifest)
         summary = {
-            "benchmark_manifest": manifest,
+            "benchmark_manifest": safe_manifest,
             "model_summary": model_summary,
             "rows": flat_rows,
         }
 
-        (root / "manifest.json").write_text(json.dumps(manifest, indent=2, allow_nan=False))
+        (root / "manifest.json").write_text(json.dumps(safe_manifest, indent=2, allow_nan=False))
         (root / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False))
 
         if flat_rows:
@@ -554,9 +618,6 @@ class BenchmarkRunner:
         cases: List[BenchmarkCase],
         hazard_models: List[HazardModelSpec],
     ) -> Dict[str, Any]:
-        """
-        Run all models across all cases.
-        """
         if not cases:
             raise ValueError("No benchmark cases provided.")
         if not hazard_models:
@@ -598,7 +659,7 @@ class BenchmarkRunner:
                 {
                     "model_id": m.model_id,
                     "kind": m.kind,
-                    "params": m.params,
+                    "params": self._json_safe(m.params),
                 }
                 for m in hazard_models
             ],
@@ -626,20 +687,6 @@ class BenchmarkRunner:
         benchmark_json_path: str | Path,
         hazard_models: List[HazardModelSpec],
     ) -> Dict[str, Any]:
-        """
-        Load benchmark cases from your existing JSON tier format.
-
-        Expected format:
-        {
-          "tile_id": "...",
-          "roi": [r0, r1, c0, c1],
-          "tiers": {
-            "easy": [...],
-            "moderate": [...],
-            "hard": [...]
-          }
-        }
-        """
         spec = json.loads(Path(benchmark_json_path).read_text())
 
         if "tile_id" in spec and spec["tile_id"] != self.cfg.tile_id:
@@ -659,132 +706,3 @@ class BenchmarkRunner:
                 cases.append(BenchmarkCase.from_dict(case, tier=tier_name))
 
         return self.run(cases=cases, hazard_models=hazard_models)
-
-
-
-    def run_case(self, case: Dict[str, Any], hazard_model_id: str = "terrain_weighted_v1") -> Dict[str, Any]:
-        """Runs one start/goal pair and saves artifacts."""
-        case_id = case["id"]
-        start: RC = tuple(case["start_rc"])
-        goal: RC = tuple(case["goal_rc"])
-
-        derived = self.dh.load_derived(self.cfg.tile_id, self.cfg.roi)
-        if derived is None:
-            raise RuntimeError(
-                "Derived rasters not found. Run the pipeline once to generate "
-                "dem_m, slope_deg, roughness_rms in the derived cache."
-            )
-
-        dem_m = derived["dem_m"]
-        slope_deg = derived["slope_deg"]
-        roughness_rms = derived["roughness_rms"]
-
-        haz_out = self.hazard_assessor.assess(slope_deg=slope_deg, roughness_rms=roughness_rms, dem_m=dem_m)
-        hazard = haz_out["hazard"]
-        hazard_meta = haz_out["hazard_meta"]
-
-        cost = build_cost_from_hazard(
-            hazard,
-            alpha=self.cfg.alpha,
-            hazard_block=self.cfg.hazard_block,
-            block_cost=self.cfg.block_cost,
-        )
-
-        corr = self.pathfinder.find_path_corridor(
-            cost=cost,
-            start=start,
-            goal=goal,
-            corridor_radii=self.cfg.corridor_radii,
-            hazard=hazard,
-        )
-
-        best = corr.get("best", None)
-        best_radius = corr.get("best_radius_px", None)  # robust if missing
-        experiment = corr.get("experiment", [])
-
-        success = bool(best and best.get("success", False))
-        path_rc = np.asarray(best["path_rc"], dtype=np.int32) if success else np.zeros((0, 2), dtype=np.int32)
-
-        out_dir = self._case_dir(case_id, hazard_model_id)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        np.save(out_dir / "hazard.npy", hazard.astype(np.float32))
-        np.save(out_dir / "cost.npy", cost.astype(np.float32))
-        np.save(out_dir / "path_rc.npy", path_rc)
-
-        nav_meta = {
-            "tile_id": self.cfg.tile_id,
-            "roi": list(self.cfg.roi),
-            "shape": list(hazard.shape),
-            "run_name": f"{self.cfg.benchmark_id}/{case_id}/{hazard_model_id}",
-            "products": ["hazard", "cost", "path_rc"],
-            "nav_meta": {
-                "start_rc": list(start),
-                "goal_rc": list(goal),
-                "hazard_assessor": hazard_meta,
-                "cost_model": {
-                    "alpha": self.cfg.alpha,
-                    "hazard_block": self.cfg.hazard_block,
-                    "block_cost": self.cfg.block_cost,
-                },
-                "pathfinder": {
-                    "connectivity": self.cfg.connectivity,
-                    "heuristic_weight": self.cfg.heuristic_weight,
-                    "corridor_radii": list(self.cfg.corridor_radii),
-                    "corridor_radius_px_used": best_radius,
-                },
-                "result": {
-                    "success": success,
-                    "total_cost": float(best["total_cost"]) if success else None,
-                    "path_len": int(path_rc.shape[0]),
-                    "expansions": int((best.get("meta") or {}).get("expansions", -1)) if success else int((best.get("meta") or {}).get("expansions", -1)),
-                    "failure_reason": None if success else "no_path_found_in_any_corridor",
-                },
-                "benchmark": {
-                    "benchmark_id": self.cfg.benchmark_id,
-                    "case_id": case_id,
-                    "tier": case.get("tier"),
-                    "hazard_model_id": hazard_model_id,
-                },
-                "corridor_experiment": experiment,
-            },
-        }
-
-        (out_dir / "nav_meta.json").write_text(json.dumps(nav_meta, indent=2, allow_nan=False))
-
-        evaluator = Evaluator(out_dir, pixel_size_m=self.cfg.pixel_size_m)
-        evaluator.save("metrics.json")
-
-        return {
-            "case_id": case_id,
-            "hazard_model_id": hazard_model_id,
-            "success": success,
-            "out_dir": str(out_dir),
-        }
-
-    def run_benchmark_file(self, benchmark_json_path: str | Path, hazard_model_id: str = "terrain_weighted_v1") -> List[Dict[str, Any]]:
-        """Loads the benchmark spec file and runs all cases (tiers included)."""
-        spec = json.loads(Path(benchmark_json_path).read_text())
-
-        # Optional safety check if spec provides these fields
-        if "tile_id" in spec and spec["tile_id"] != self.cfg.tile_id:
-            raise ValueError(f"Benchmark spec tile_id={spec['tile_id']} does not match cfg.tile_id={self.cfg.tile_id}")
-        if "roi" in spec and tuple(spec["roi"]) != tuple(self.cfg.roi):
-            raise ValueError(f"Benchmark spec roi={spec['roi']} does not match cfg.roi={list(self.cfg.roi)}")
-
-        results: List[Dict[str, Any]] = []
-
-        for tier_name, cases in spec["tiers"].items():
-            for case in cases:
-                case = dict(case)
-                case["tier"] = tier_name
-                res = self.run_case(case, hazard_model_id=hazard_model_id)
-                res["tier"] = tier_name
-                results.append(res)
-
-        root = self._benchmark_root()
-        root.mkdir(parents=True, exist_ok=True)
-        (root / f"run_log_{hazard_model_id}.json").write_text(json.dumps(results, indent=2, allow_nan=False))
-
-        return results
-    
