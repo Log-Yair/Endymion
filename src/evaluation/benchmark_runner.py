@@ -648,8 +648,8 @@ class BenchmarkRunner:
             "rows": flat_rows,
         }
 
-        (root / "manifest.json").write_text(json.dumps(self._json_safe(manifest), indent=2, allow_nan=False))
-        (root / "summary.json").write_text(json.dumps(self._json_safe(summary), indent=2, allow_nan=False))
+        (root / "manifest.json").write_text(json.dumps(self._json_safe(manifest), indent=2, allow_nan=False)) # Ensure all values are JSON serializable, converting NaNs to None and numpy types to native Python types.
+        (root / "summary.json").write_text(json.dumps(self._json_safe(summary), indent=2, allow_nan=False)) # Ensure all values are JSON serializable, converting NaNs to None and numpy types to native Python types.
 
         if flat_rows:
             fieldnames = list(flat_rows[0].keys())
