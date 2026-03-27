@@ -210,7 +210,7 @@ class Pathfinder:
         return {
             "success": False,
             "path_rc": [],
-            "total_cost": None,
+            "total_cost": Optional[float](None),
             "meta": {"reason": "no_path", "expansions": expansions},
         }
 
@@ -253,14 +253,18 @@ class Pathfinder:
 
             res = self.find_path(cost, start, goal, allowed_mask=allowed)
 
+            total_cost = res.get("total_cost", None)
+            if total_cost is not None and not np.isfinite(total_cost):
+                total_cost = None
+
             row: Dict[str, Any] = {
                 "corridor_radius_px": int(rad),
                 "success": bool(res.get("success", False)),
                 "expansions": res.get("meta", {}).get("expansions", None),
                 "path_len": len(res.get("path_rc", [])),
-                "total_cost": float(res.get("total_cost", float("inf"))),
+                "total_cost": total_cost,
+                "reason": res.get("meta", {}).get("reason", None),
             }
-
             if hazard is not None and row["success"] and row["path_len"] > 0:
                 path_rc = np.asarray(res["path_rc"], dtype=np.int32)
                 vals = hazard[path_rc[:, 0], path_rc[:, 1]]
