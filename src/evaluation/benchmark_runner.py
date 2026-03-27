@@ -662,23 +662,6 @@ class BenchmarkRunner:
 
 
 
-
-
-
-    # 
-
-
-
-
-
-
-
-
-
-
-
-
-
     def run_case(self, case: Dict[str, Any], hazard_model_id: str = "terrain_weighted_v1") -> Dict[str, Any]:
         """Runs one start/goal pair and saves artifacts."""
         case_id = case["id"]
