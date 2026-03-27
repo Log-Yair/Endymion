@@ -128,7 +128,7 @@ class Pathfinder:
                 return {
                     "success": False,
                     "path_rc": [],
-                    "total_cost": float("inf"),
+                    "total_cost": None,
                     "meta": {"reason": "start_or_goal_outside_corridor"},
                 }
 
@@ -141,7 +141,7 @@ class Pathfinder:
             return {
                 "success": False,
                 "path_rc": [],
-                "total_cost": float("inf"),
+                "total_cost": None,
                 "meta": {"reason": "start_or_goal_blocked"},
             }
 
@@ -210,7 +210,7 @@ class Pathfinder:
         return {
             "success": False,
             "path_rc": [],
-            "total_cost": float("inf"),
+            "total_cost": None,
             "meta": {"reason": "no_path", "expansions": expansions},
         }
 
@@ -246,7 +246,7 @@ class Pathfinder:
                     "success": False,
                     "expansions": None,
                     "path_len": 0,
-                    "total_cost": float("inf"),
+                    "total_cost": None,
                     "reason": "start_or_goal_outside_corridor",
                 })
                 continue
