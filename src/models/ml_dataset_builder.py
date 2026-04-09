@@ -143,4 +143,17 @@ class MLDatasetBuilder:
         crater_mask_path = derived_dir / "crater_mask.npy" # construct the full path to crater_mask.npy
 
         if not crater_mask_path.exists():
-            raise ValueError(f"Missing required raster 'crater_mask.npy' in derived cache at {crater_mask_path}")
+            raise FileNotFoundError(
+                f"Missing crater label raster: {crater_mask_path.name}. "
+                "Build crater products first with CraterPredictor(catalogue_raster_v1)."
+            )
+        
+        crater_mask = np.load(crater_mask_path).astype(np.uint8) # load and ensure binary uint8 type
+        self._validate_same_shape("crater_mask", crater_mask, ref_shape)
+
+        #core feature set ( just terrain )
+        feature_rasters: Dict[str, np.ndarray] = {
+            "elevation_m": dem_m,
+            "slope_deg": slope_deg,
+            "roughness_rms": roughness_rms,
+        }
