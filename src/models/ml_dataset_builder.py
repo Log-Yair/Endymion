@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Required, Tuple, Any
 
 import json
 import numpy as np
@@ -65,6 +65,7 @@ class MLDatasetBuilder:
     # Optional random seed for sampling / balancing
     random_state: int = 42
 
+    # Internal cache for the built dataset
     def build_from_cache(
         self,
         dh: DataHandler,
@@ -116,3 +117,13 @@ class MLDatasetBuilder:
                 "paths": dict,
             }
         """
+
+        derived = dh.load_derived(tile_id, roi)
+        if derived is None:
+            raise ValueError(f"No derived data found in cache for tile {tile_id} and ROI {roi}")
+        
+        # required terrain inpouts
+        required = ["dem_m", "slope_deg", "roughness_rms"]
+        missing = [k for k in required if k not in derived]
+        if missing:
+            raise ValueError(f"Missing required rasters in derived cache: {missing}")
