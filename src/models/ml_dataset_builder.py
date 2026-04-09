@@ -132,4 +132,15 @@ class MLDatasetBuilder:
         slope_deg = np.asarray(derived["slope_deg"], dtype=np.float32) # ensure consistent dtype
         roughness_rms = np.asarray(derived["roughness_rms"], dtype=np.float32) # ensure consistent dtype
 
-        
+        ref_shape = dem_m.shape # reference shape for consistency checks
+
+        self._validate_same_shape("slope_deg", slope_deg, ref_shape)
+        self._validate_same_shape("roughness_rms", roughness_rms, ref_shape)
+
+        #load crater label fronm Roi derived cache
+
+        derived_dir = Path(dh.get_derived_dir(tile_id, roi)) # get the derived directory path
+        crater_mask_path = derived_dir / "crater_mask.npy" # construct the full path to crater_mask.npy
+
+        if not crater_mask_path.exists():
+            raise ValueError(f"Missing required raster 'crater_mask.npy' in derived cache at {crater_mask_path}")
