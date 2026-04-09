@@ -54,3 +54,66 @@ class MLDatasetBuilder:
       (crater_distance_m, crater_density, crater_mask) as predictors.
     - crater_mask is only used as the supervised label.
     """
+    # Block size used for later spatial train/test splits
+    block_size_px: int = 64
+
+    # Label column name
+    label_column: str = "label_crater"
+
+    # Whether to drop NaN / inf rows
+    drop_invalid: bool = True
+
+    # Optional random seed for sampling / balancing
+    random_state: int = 42
+
+    def build_from_cache(
+        self,
+        dh: DataHandler,
+        tile_id: str,
+        roi: ROI,
+        *,
+        include_rowcol: bool = True,
+        include_block_ids: bool = True,
+        balance_strategy: Optional[str] = None,
+        negative_ratio: float = 1.0,
+        extra_feature_rasters: Optional[Dict[str, np.ndarray]] = None,
+        save_csv: bool = False,
+        csv_name: str = "ml_dataset.csv",
+    ) -> Dict[str, Any]:
+        """
+        Build dataset from the existing ROI cache.
+
+        Parameters
+        ----------
+        dh : DataHandler
+            Endymion DataHandler instance.
+        tile_id : str
+            Tile ID used by the current ROI cache.
+        roi : ROI
+            (r0, r1, c0, c1)
+        include_rowcol : bool
+            Include row and col columns.
+        include_block_ids : bool
+            Include block_row, block_col, and block_id for spatial splits.
+        balance_strategy : Optional[str]
+            None            -> keep all samples
+            "undersample"   -> keep all positives + sample negatives
+        negative_ratio : float
+            If balance_strategy="undersample":
+            negatives kept = positives * negative_ratio
+        extra_feature_rasters : Optional[Dict[str, np.ndarray]]
+            Additional terrain-only feature rasters aligned to the ROI.
+        save_csv : bool
+            If True, save the built dataset into the ROI derived directory.
+        csv_name : str
+            CSV filename if save_csv=True
+
+        Returns
+        -------
+        Dict[str, Any]
+            {
+                "dataframe": pd.DataFrame,
+                "meta": dict,
+                "paths": dict,
+            }
+        """
