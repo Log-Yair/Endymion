@@ -157,3 +157,15 @@ class MLDatasetBuilder:
             "slope_deg": slope_deg,
             "roughness_rms": roughness_rms,
         }
+
+        # optional extra feaetures passed manually (but still terrain-derived, not crater-derived)
+        if extra_feature_rasters is not None:
+            for name, raster in extra_feature_rasters.items():
+                arr = np.asarray(raster, dtype=np.float32) # ensure consistent dtype
+                self._validate_same_shape(name, arr, ref_shape) # check shape consistency with reference
+                feature_rasters[name] = arr.astype(np.float32) # store in consistent dtype
+
+        
+        df = self._rasters_to_dataframe(
+            
+        )
