@@ -1,6 +1,6 @@
-#   * data_handler.py -> loads derived terrain rasters from the ROI cache
-#   * crater_predictor.py / crater_raster.py -> cache crater_mask.npy in the same ROI derived dir
-#   * benchmark_runner.py -> already expects the ROI derived cache to contain terrain rasters
+#  * data_handler.py -> loads derived terrain rasters from the ROI cache
+#  * crater_predictor.py / crater_raster.py -> cache crater_mask.npy in the same ROI derived dir
+#  * benchmark_runner.py -> already expects the ROI derived cache to contain terrain rasters
 # - Design idea:
 #   first ML stage = predict crater presence from terrain-derived features only.
 # - Important leakage rule:
@@ -127,3 +127,9 @@ class MLDatasetBuilder:
         missing = [k for k in required if k not in derived]
         if missing:
             raise ValueError(f"Missing required rasters in derived cache: {missing}")
+        
+        dem_m = np.asarray(derived["dem_m"], dtype=np.float32) # ensure consistent dtype
+        slope_deg = np.asarray(derived["slope_deg"], dtype=np.float32) # ensure consistent dtype
+        roughness_rms = np.asarray(derived["roughness_rms"], dtype=np.float32) # ensure consistent dtype
+
+        
