@@ -1,5 +1,3 @@
-# References / notes:
-# - Built to match your current Endymion structure:
 #   * data_handler.py -> loads derived terrain rasters from the ROI cache
 #   * crater_predictor.py / crater_raster.py -> cache crater_mask.npy in the same ROI derived dir
 #   * benchmark_runner.py -> already expects the ROI derived cache to contain terrain rasters
@@ -22,6 +20,7 @@ import pandas as pd
 from src.data.data_handler import DataHandler, ROI
 
 
+# machine learning builder for the first crater model, which predicts crater presence from terrain features only
 @dataclass
 class MLDatasetBuilder:
     """
