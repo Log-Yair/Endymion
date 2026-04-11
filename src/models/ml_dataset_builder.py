@@ -230,4 +230,75 @@ class MLDatasetBuilder:
             "meta": meta,
             "paths": paths,
         }
+    
+    # -------------------------------------------------------------
+    # Core raster -> dataframe conversion
+    # ---------------------------------------------------------
+    # This is where we flatten the aligned rasters into a per-pixel DataFrame, and add row/col and block IDs if requested.
+    def _rasters_to_dataframe(
+        self,
+        *,
+        feature_rasters: Dict[str, np.ndarray],
+        label: np.ndarray,
+        include_rowcol: bool,
+        include_block_ids: bool,
+    ) -> pd.DataFrame:
+        """
+        Flatten aligned rasters into a per-pixel DataFrame.
+        """
+        ref_name, ref = next(iter(feature_rasters.items())) # take the first feature raster as reference for shape and alignment
+        H, W = ref.shape
+
+        rows, cols = np.indices((H, W), dtype=np.int32)
+
+        data: Dict[str, np.ndarray] = {} # initialize data dict to collect columns for the DataFrame
+
+        # Add row and col if requested
+        if include_rowcol:
+            data["row"] = rows.ravel()
+            data["col"] = cols.ravel()
+
+        # Add block IDs if requested (for spatial splitting later)
+        if include_block_ids:
+            block_row = (rows // self.block_size_px).astype(np.int32)
+            block_col = (cols // self.block_size_px).astype(np.int32)
+            block_id = (block_row * 100000 + block_col).astype(np.int32)
+
+            data["block_row"] = block_row.ravel()
+            data["block_col"] = block_col.ravel()
+            data["block_id"] = block_id.ravel()
+
+        # Add feature columns
+        for name, arr in feature_rasters.items():
+            self._validate_same_shape(name, arr, ref.shape)
+            data[name] = arr.ravel()
+
+        data[self.label_column] = label.astype(np.uint8, copy=False).ravel() # ensure label is binary uint8 and add to data dict
+
+        return pd.DataFrame(data) # convert the collected data dict into a pandas DataFrame
+    
+        # ------------------------------------------------------------------
+    # Cleaning
+    # ------------------------------------------------------------------
+
+    def _drop_invalid_rows(self, df: pd.DataFrame, feature_columns: List[str]) -> pd.DataFrame:
+        """
+        Remove rows where any feature is NaN or infinite,since these would not be valid inputs for ML models.
+        """
+        valid_mask = np.ones(len(df), dtype=bool) #all true mask to start with
+
+        # Check each feature column for finite values and update the valid_mask accordingly
+        for col in feature_columns:
+            vals = df[col].to_numpy()
+            valid_mask &= np.isfinite(vals)
+
+        return df.loc[valid_mask].copy() #copy any remaining valid rows into a new DataFrame and return it
+
+    # ------------------------------------------------------------------
+    # Class balancing
+    # --------------------------------------------------------
+
+
+
+    
 
