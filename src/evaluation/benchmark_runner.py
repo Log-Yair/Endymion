@@ -548,12 +548,15 @@ class BenchmarkRunner:
                 impassable_slope_deg=model.params.get("impassable_slope_deg", 40.0),
             )
 
+            """
+            terrain component is computed the same way as in the terrain_only model, using the slope and roughness rasters to compute a base hazard. This ensures that all models share the same underlying terrain hazard assessment, and the crater information is fused on top of that.
+            """
             terrain_out = terrain_assessor.assess(
                 slope_deg=slope_deg,
                 roughness_rms=roughness_rms,
                 dem_m=dem_m,
             )
-            terrain_hazard = terrain_out["hazard"].astype(np.float32, copy=False)
+            terrain_hazard = terrain_out["hazard"].astype(np.float32, copy=False) # Convert to float32 for consistency and memory efficiency in downstream processing.
 
             # --- Crater terms ---
             density_n = np.clip(crater_density, 0.0, 1.0)
@@ -581,7 +584,7 @@ class BenchmarkRunner:
                 (w_proximity * proximity_n) +
                 (w_ml * crater_proba_ml_n)
             ) / crater_weight_sum
-            crater_term = crater_term.astype(np.float32)
+            crater_term = crater_term.astype(np.float32) # Convert to float32 for consistency and memory efficiency in downstream processing.
 
             # Outer fusion weights
             w_terrain = float(model.params.get("w_terrain", 0.85))
