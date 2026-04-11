@@ -229,6 +229,54 @@ class BenchmarkRunner:
                 "meta": meta_path.name,
             },
         }
+    
+    # ------------------------------------------------------------------
+    # Raster loading helpers
+    # ------------------------------------------------------------------
+    # This method is a general helper for loading any single raster, either from an explicit path or from the ROI derived dir by product name. It checks for existence and shape, and returns a dict with the array and metadata.
+    def _load_single_raster(
+        self,
+        *,
+        expected_shape: Tuple[int, int],
+        raster_path: Optional[str | Path] = None,
+        product_name: Optional[str] = None,
+        dtype: np.dtype = np.float32,
+    ) -> Dict[str, Any]:
+        """
+        Load one ROI-aligned raster either from an explicit path or from the ROI derived dir.
+
+        Parameters
+        ----------
+        raster_path:
+            Full path to a .npy file.
+        product_name:
+            Basename inside the ROI derived dir, without '.npy'.
+            Example: 'crater_proba_ml_v1' -> crater_proba_ml_v1.npy
+        """
+        if raster_path is None and product_name is None:
+            raise ValueError("Provide either raster_path or product_name.") # Ensure at least one of raster_path or product_name is provided.
+
+        if raster_path is not None:
+            path = Path(raster_path) # Use the provided explicit path.
+        else:
+            path = Path(self.dh.derived_dir(self.cfg.tile_id, self.cfg.roi)) / f"{product_name}.npy" # Construct path from product name in the ROI derived directory.
+
+        if not path.exists():
+            raise FileNotFoundError(f"Raster not found: {path}") # Check that the raster file exists.
+
+        arr = np.load(path).astype(dtype, copy=False) # Load the raster and convert to the desired dtype without copying if possible.
+        if arr.shape != expected_shape:
+            raise ValueError(
+                f"Raster shape {arr.shape} does not match expected ROI shape {expected_shape}: {path}"
+            ) 
+        # Check that the raster shape matches the expected shape for the ROI.
+
+        # If the raster is valid, return it along with metadata about the path and name.
+        return {
+            "array": arr,
+            "path": str(path),
+            "name": path.name,
+        }
 
     # ------------------------------------------------------------------
     # Hazard builders
