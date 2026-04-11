@@ -337,6 +337,18 @@ class MLDatasetBuilder:
         out = out.sample(frac=1.0, random_state=self.random_state)  # shuffle
         return out.copy() #copy and return the balanced dataset
 
+    # ------------------------------------------------
+    # Validation helpss
+    # ------------------------------------------------
+
+    @staticmethod
+    def _validate_same_shape(name: str, arr: np.ndarray, expected_shape: Tuple[int, int]) -> None:
+        if arr.shape != expected_shape:
+            raise ValueError(
+                f"{name} shape {arr.shape} does not match expected shape {expected_shape}."
+            )
+
+
 
 
     
