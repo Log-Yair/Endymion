@@ -167,5 +167,8 @@ class MLDatasetBuilder:
 
         
         df = self._rasters_to_dataframe(
-            
+            feature_rasters=feature_rasters,
+            label=crater_mask,
+            include_rowcol=include_rowcol,
+            include_block_ids=include_block_ids,
         )
