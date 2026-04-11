@@ -139,7 +139,7 @@ class MLDatasetBuilder:
 
         #load crater label fronm Roi derived cache
 
-        derived_dir = Path(dh.get_derived_dir(tile_id, roi)) # get the derived directory path
+        derived_dir = Path(dh.derived_dir(tile_id, roi)) # get the derived directory path
         crater_mask_path = derived_dir / "crater_mask.npy" # construct the full path to crater_mask.npy
 
         if not crater_mask_path.exists():
