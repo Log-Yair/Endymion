@@ -172,3 +172,62 @@ class MLDatasetBuilder:
             include_rowcol=include_rowcol,
             include_block_ids=include_block_ids,
         )
+
+        # Remove invalid rows if requested
+        if self.drop_invalid:
+            df = self._drop_invalid_rows(df, feature_columns=list(feature_rasters.keys()))
+
+        # Optional balancing
+        if balance_strategy is not None:
+            if balance_strategy != "undersample":
+                raise ValueError(
+                    f"Unsupported balance_strategy={balance_strategy}. "
+                    "Currently supported: None, 'undersample'."
+                )
+            
+            # For undersampling, keep all positive samples and randomly sample negative samples to achieve the desired negative_ratio.
+            df = self._undersample_negatives(
+                df=df,
+                label_column=self.label_column,
+                negative_ratio=negative_ratio,
+            )
+
+        df = df.reset_index(drop=True) # reset index after any filtering/sampling steps
+
+        # Metadata
+        positives = int((df[self.label_column] == 1).sum()) # count positive samples in the final dataset
+        negatives = int((df[self.label_column] == 0).sum()) # count negative samples in the final dataset
+
+        meta = {
+            "tile_id": tile_id,
+            "roi": list(roi),
+            "shape": list(ref_shape),
+            "num_rows": int(len(df)),
+            "num_positive": positives,
+            "num_negative": negatives,
+            "positive_ratio": float(positives / len(df)) if len(df) > 0 else None,
+            "feature_columns": list(feature_rasters.keys()),
+            "label_column": self.label_column,
+            "block_size_px": int(self.block_size_px),
+            "balance_strategy": balance_strategy,
+            "negative_ratio": float(negative_ratio),
+            "source_paths": {
+                "derived_dir": str(derived_dir),
+                "crater_mask": str(crater_mask_path),
+            },
+        }
+
+        paths = {} # for any output paths we want to return (e.g. saved CSV)
+
+        #save the built dataset as a CSV in the ROI derived directory for easy access by benchmark_runner and others
+        if save_csv:
+            csv_path = derived_dir / csv_name
+            df.to_csv(csv_path, index=False)
+            paths["csv"] = str(csv_path)
+
+        return {
+            "dataframe": df,
+            "meta": meta,
+            "paths": paths,
+        }
+
