@@ -327,7 +327,7 @@ class MLDatasetBuilder:
         n_neg_keep = min(n_neg_keep, len(negatives)) #min with the total number of available negatives to avoid trying to sample more than exist
 
         # sampling without replacement to get unique negative samples.
-        negatives_samplef = negatives.sample(
+        negatives_sampled = negatives.sample(
             n=n_neg_keep,
             random_state=self.random_state,
             replace=False, # sample without replacement to get unique negative samples
