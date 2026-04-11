@@ -86,6 +86,7 @@ class HazardModelSpec:
     kind:
       - terrain_only
       - terrain_plus_crater
+      - terrain_plus_crater_ml
       - precomputed_hazard
     """
     model_id: str
