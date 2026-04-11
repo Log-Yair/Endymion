@@ -450,6 +450,214 @@ class BenchmarkRunner:
                 "components": components,
                 "hazard_meta": meta,
             }
+        
+        """
+        this is the model for terrain + crater with ML-based crater probability . similar to the other models, this one extends terrain_plus_crater by adding an ML-based crater probability term into the crater component, with configurable   weights. The ML crater probability can be provided directly as a parameter or loaded from a raster path, and is normalized and fused with the density and proximity terms to create a more informed crater hazard component
+        """
+
+        if model.kind == "terrain_plus_crater_ml":
+            crater_density = model.params.get("crater_density") # Optional 2D array of crater density values normalized to [0, 1]. Higher means more craters.
+            crater_distance_m = model.params.get("crater_distance_m") # Optional 2D array of distance to nearest crater in meters. Lower means closer to a crater.
+            crater_mask = model.params.get("crater_mask") # Optional 2D binary array where 1 indicates crater presence and 0 indicates no crater. Can be used as an impassable mask or as an additional feature.
+
+            crater_cache_meta = None # cache metadata if crater products are loaded from cache
+            crater_cache_paths = None # cache paths if crater products are loaded from cache
+
+            # Load crater catalogue-derived products from ROI cache if not injected directly
+            if crater_density is None or crater_distance_m is None:
+                cache_product_name = model.params.get("cache_product_name", "crater_mask")
+                crater_cache = self._load_crater_products_from_cache(
+                    expected_shape=slope_deg.shape,
+                    cache_product_name=cache_product_name,
+                )
+                # If crater products are loaded from cache, they will override any direct parameters. 
+                crater_mask = crater_cache["crater_mask"]
+                crater_density = crater_cache["crater_density"]
+                crater_distance_m = crater_cache["crater_distance_m"]
+                crater_cache_meta = crater_cache["meta"]
+                crater_cache_paths = crater_cache["paths"]
+
+            # Validate and convert crater inputs to expected dtypes
+            crater_density = np.asarray(crater_density, dtype=np.float32)
+            crater_distance_m = np.asarray(crater_distance_m, dtype=np.float32)
+
+            if crater_mask is not None:
+                crater_mask = np.asarray(crater_mask, dtype=np.uint8) # Assuming crater_mask is binary, uint8 is sufficient and more memory efficient than float32.
+
+
+            # validate the shapes of the crater inputs to ensure they match the terrain rasters
+            if crater_density.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: crater_density shape {crater_density.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
+            if crater_distance_m.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: crater_distance_m shape {crater_distance_m.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
+            if crater_mask is not None and crater_mask.shape != slope_deg.shape:
+                raise ValueError(
+                    f"{model.model_id}: crater_mask shape {crater_mask.shape} "
+                    f"does not match terrain shape {slope_deg.shape}"
+                )
+
+            # Load ML crater probability raster
+            crater_proba_ml = model.params.get("crater_proba_ml")
+            crater_proba_ml_meta = None
+
+            if crater_proba_ml is None:
+                ml_loaded = self._load_single_raster(
+                    expected_shape=slope_deg.shape,
+                    raster_path=model.params.get("crater_proba_ml_path"),
+                    product_name=model.params.get("ml_product_name", "crater_proba_ml_v1"),
+                    dtype=np.float32,
+                )
+
+                # load ml crater probability raster, which should be normalized to [0, 1] where higher means more likely to be a crater. This can come from an explicit path or from the ROI derived products by name.
+                crater_proba_ml = ml_loaded["array"]
+                crater_proba_ml_meta = {
+                    "source": "npy",
+                    "path": ml_loaded["path"],
+                    "name": ml_loaded["name"],
+                }
+
+            # validate the shape of the ML crater probability raster to ensure it matches the terrain rasters. If it doesn't match, raise an error to prevent silent broadcasting issues.
+            else:
+                crater_proba_ml = np.asarray(crater_proba_ml, dtype=np.float32)
+                if crater_proba_ml.shape != slope_deg.shape:
+                    raise ValueError(
+                        f"{model.model_id}: crater_proba_ml shape {crater_proba_ml.shape} "
+                        f"does not match terrain shape {slope_deg.shape}"
+                    )
+
+                # if crater prob is given directly as a parameter, note in the metadata that it came from direct parameters rather than a loaded raster, and it doesnt have path or name info for it.
+                crater_proba_ml_meta = {
+                    "source": "direct_params",
+                    "path": None,
+                    "name": None,
+                }
+
+            # --- Terrain component ---
+            terrain_assessor = HazardAssessor(
+                slope_deg_max=model.params.get("slope_deg_max", 34.55),
+                roughness_rms_max=model.params.get("roughness_rms_max", 18.56),
+                w_slope=model.params.get("w_slope", 0.7),
+                w_roughness=model.params.get("w_roughness", 0.3),
+                use_impassable_mask=model.params.get("use_impassable_mask", True),
+                impassable_slope_deg=model.params.get("impassable_slope_deg", 40.0),
+            )
+
+            terrain_out = terrain_assessor.assess(
+                slope_deg=slope_deg,
+                roughness_rms=roughness_rms,
+                dem_m=dem_m,
+            )
+            terrain_hazard = terrain_out["hazard"].astype(np.float32, copy=False)
+
+            # --- Crater terms ---
+            density_n = np.clip(crater_density, 0.0, 1.0)
+
+            max_distance_m = float(model.params.get("max_distance_m", 1000.0))
+            if max_distance_m <= 0:
+                raise ValueError("max_distance_m must be > 0 for terrain_plus_crater_ml.")
+
+            distance_n = np.clip(crater_distance_m / max_distance_m, 0.0, 1.0)
+            proximity_n = 1.0 - distance_n
+
+            crater_proba_ml_n = np.clip(crater_proba_ml, 0.0, 1.0)
+
+            # Internal crater-component weights
+            w_density = float(model.params.get("w_crater_density", 0.3))
+            w_proximity = float(model.params.get("w_crater_proximity", 0.3))
+            w_ml = float(model.params.get("w_crater_ml", 0.4))
+
+            crater_weight_sum = w_density + w_proximity + w_ml
+            if crater_weight_sum <= 0:
+                raise ValueError("w_crater_density + w_crater_proximity + w_crater_ml must be > 0.")
+
+            crater_term = (
+                (w_density * density_n) +
+                (w_proximity * proximity_n) +
+                (w_ml * crater_proba_ml_n)
+            ) / crater_weight_sum
+            crater_term = crater_term.astype(np.float32)
+
+            # Outer fusion weights
+            w_terrain = float(model.params.get("w_terrain", 0.85))
+            w_crater = float(model.params.get("w_crater", 0.15))
+
+            hazard = np.clip(
+                w_terrain * terrain_hazard + w_crater * crater_term,
+                0.0,
+                1.0,
+            ).astype(np.float32)
+
+            # Preserve your hard slope safety rule
+            if model.params.get("use_impassable_mask", True):
+                impassable_slope_deg = float(model.params.get("impassable_slope_deg", 40.0))
+                hazard[slope_deg > impassable_slope_deg] = 1.0
+
+            meta = {
+                "model": model.model_id,
+                "benchmark_model_kind": model.kind,
+                "terrain_component": terrain_out["meta"],
+                "crater_component": {
+                    "source": "derived_cache" if crater_cache_meta is not None else "direct_params",
+                    "cache_product_name": model.params.get("cache_product_name", "crater_mask"),
+                    "cache_products": crater_cache_paths,
+                    "cache_catalogue_meta": crater_cache_meta,
+                    "max_distance_m": max_distance_m,
+                    "w_crater_density": w_density,
+                    "w_crater_proximity": w_proximity,
+                    "w_crater_ml": w_ml,
+                    "crater_subweight_sum": crater_weight_sum,
+                    "density_stats": {
+                        "min": float(np.nanmin(density_n)),
+                        "max": float(np.nanmax(density_n)),
+                        "mean": float(np.nanmean(density_n)),
+                    },
+                    "proximity_stats": {
+                        "min": float(np.nanmin(proximity_n)),
+                        "max": float(np.nanmax(proximity_n)),
+                        "mean": float(np.nanmean(proximity_n)),
+                    },
+                    "ml_probability": {
+                        "source": crater_proba_ml_meta["source"],
+                        "path": crater_proba_ml_meta["path"],
+                        "name": crater_proba_ml_meta["name"],
+                        "min": float(np.nanmin(crater_proba_ml_n)),
+                        "max": float(np.nanmax(crater_proba_ml_n)),
+                        "mean": float(np.nanmean(crater_proba_ml_n)),
+                    },
+                },
+                "fusion": {
+                    "w_terrain": w_terrain,
+                    "w_crater": w_crater,
+                },
+                "stats": {
+                    "hazard_min": float(np.nanmin(hazard)),
+                    "hazard_max": float(np.nanmax(hazard)),
+                    "hazard_mean": float(np.nanmean(hazard)),
+                    "nan_ratio": float(np.isnan(hazard).mean()),
+                },
+            }
+
+            components = {
+                "terrain_hazard": terrain_hazard,
+                "crater_density_norm": density_n,
+                "crater_proximity_norm": proximity_n,
+                "crater_proba_ml_norm": crater_proba_ml_n,
+                "crater_term": crater_term,
+            }
+            if crater_mask is not None:
+                components["crater_mask"] = crater_mask
+
+            return {
+                "hazard": hazard,
+                "components": components,
+                "hazard_meta": meta,
+            }
 
         if model.kind == "precomputed_hazard":
             hazard = np.asarray(model.params["hazard"], dtype=np.float32)
