@@ -298,6 +298,36 @@ class MLDatasetBuilder:
     # Class balancing
     # --------------------------------------------------------
 
+    """
+    Function to undersample negative samples while keeping all positive samples, based on the specified negative_ratio
+    """
+    def _undersample_negatives(
+        self,
+        *,
+        df: pd.DataFrame,
+        label_column: str,
+        negative_ratio: float,
+    ) -> pd.DataFrame:
+        """
+        Keep all positives, sample negatives.
+
+        negatives_kept = positives * negative_ratio
+        """
+        if negative_ratio <= 0:
+            raise ValueError("negative_ratio must be > 0.")
+
+        positives = df[df[label_column] == 1] # filter the DataFrame to get all positive samples (where label_column == 1)
+        negatives = df[df[label_column] == 0] # filter the DataFrame to get all negative samples (where label_column == 0)
+
+        n_pos = len(positives) #count the number of positive samples in the dataset
+        if n_pos == 0:
+            raise ValueError("Cannot undersample negatives because there are no positive samples.")
+
+        n_neg_keep = int(round(n_pos * negative_ratio)) # calculate how many negative samples to keep based on the desired negative_ratio relative to the number of positives
+        n_neg_keep = min(n_neg_keep, len(negatives)) #min with the total number of available negatives to avoid trying to sample more than exist
+
+
+
 
 
     
