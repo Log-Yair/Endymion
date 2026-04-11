@@ -326,7 +326,16 @@ class MLDatasetBuilder:
         n_neg_keep = int(round(n_pos * negative_ratio)) # calculate how many negative samples to keep based on the desired negative_ratio relative to the number of positives
         n_neg_keep = min(n_neg_keep, len(negatives)) #min with the total number of available negatives to avoid trying to sample more than exist
 
+        # sampling without replacement to get unique negative samples.
+        negatives_samplef = negatives.sample(
+            n=n_neg_keep,
+            random_state=self.random_state,
+            replace=False, # sample without replacement to get unique negative samples
+        )
 
+        out = pd.concat([positives, negatives_sampled], axis=0) #
+        out = out.sample(frac=1.0, random_state=self.random_state)  # shuffle
+        return out.copy() #copy and return the balanced dataset
 
 
 
