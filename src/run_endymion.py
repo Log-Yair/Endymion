@@ -31,18 +31,58 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
+import types
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
+THIS_DIR = Path(__file__).resolve().parent
+if str(THIS_DIR) not in sys.path:
+    sys.path.insert(0, str(THIS_DIR))
+
+import numpy as np
+
 # -----------------------------------------------------------------------------
 # Import strategy
 # -----------------------------------------------------------------------------
-# Falls back to flat-module imports so this file is still easy to inspect/test outside the full repo structure.
+# Falls back to a flat-file layout by installing lightweight module aliases so files like crater_predictor.py that still import src.data.crater_raster can keep working during local cleanup/testing.
+def _install_flat_src_aliases() -> None:
+    src_pkg = sys.modules.setdefault("src", types.ModuleType("src"))
+
+    for pkg_name in ["data", "features", "models", "planning", "evaluation"]:
+        full_name = f"src.{pkg_name}"
+        pkg = sys.modules.get(full_name)
+        if pkg is None:
+            pkg = types.ModuleType(full_name)
+            sys.modules[full_name] = pkg
+        setattr(src_pkg, pkg_name, pkg)
+
+    alias_map = {
+        "src.data.data_handler": "data_handler",
+        "src.data.crater_raster": "crater_raster",
+        "src.features.feature_extractor": "feature_extractor",
+        "src.models.crater_predictor": "crater_predictor",
+        "src.models.hazard_assessor": "hazard_assessor",
+        "src.planning.pathfinder": "pathfinder",
+        "src.evaluation.evaluator": "evaluator",
+    }
+
+    for alias, flat_name in alias_map.items():
+        if alias in sys.modules:
+            continue
+        module = importlib.import_module(flat_name)
+        sys.modules[alias] = module
+
+        parent_name, attr_name = alias.rsplit(".", 1)
+        parent = sys.modules[parent_name]
+        setattr(parent, attr_name, module)
+
+
 try:
     from src.data.data_handler import DataHandler, GeoTiffTileSpec, ROI
     from src.features.feature_extractor import FeatureExtractor
@@ -51,13 +91,13 @@ try:
     from src.planning.pathfinder import Pathfinder, build_cost_from_hazard
     from src.evaluation.evaluator import Evaluator
 except ImportError:
-    from data_handler import DataHandler, GeoTiffTileSpec, ROI
-    from feature_extractor import FeatureExtractor
-    from crater_predictor import CraterPredictor
-    from hazard_assessor import HazardAssessor
-    from pathfinder import Pathfinder, build_cost_from_hazard
-    from evaluator import Evaluator
-
+    _install_flat_src_aliases()
+    from src.data.data_handler import DataHandler, GeoTiffTileSpec, ROI
+    from src.features.feature_extractor import FeatureExtractor
+    from src.models.crater_predictor import CraterPredictor
+    from src.models.hazard_assessor import HazardAssessor
+    from src.planning.pathfinder import Pathfinder, build_cost_from_hazard
+    from src.evaluation.evaluator import Evaluator
 
 # -----------------------------------------------------------------------------
 # Configuration
