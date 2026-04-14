@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 BenchmarkRunner for Endymion
-# - Redesign based on your current BenchmarkRunner, Evaluator, HazardAssessor,
-#   Pathfinder, DataHandler, and crater integration direction in Endymion.
+# - Redesign based on current BenchmarkRunner, Evaluator, HazardAssessor, Pathfinder, DataHandler, and crater integration direction in Endymion.
 # - Keeps compatibility with the existing per-run Evaluator contract:
-#   hazard.npy, cost.npy, path_rc.npy, nav_meta.json -> metrics.json
+#       hazard.npy, cost.npy, path_rc.npy, nav_meta.json -> metrics.json
 # - Main design change:
 #   benchmark_runner now supports:
 #       1) multiple benchmark cases
@@ -13,7 +12,7 @@ BenchmarkRunner for Endymion
 # - csv is required as to write the sumarry file, which is written as a csv
 # - math is used to detect non-finite plain python floats 
 # - Idea source:
-#   your current benchmark_runner.py only labels hazard_model_id in outputs,
+#   current benchmark_runner.py only labels hazard_model_id in outputs,
 #   but still always calls the same HazardAssessor internally.
 #   This version turns hazard_model_id into an actual model registry.
 """
@@ -23,7 +22,6 @@ from __future__ import annotations
 
 import csv
 import json
-from logging import root
 import math
 from dataclasses import dataclass, field
 from pathlib import Path

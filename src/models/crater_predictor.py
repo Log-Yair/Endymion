@@ -1,4 +1,3 @@
-# References / notes:
 #     * crater_raster.py = build raster products from catalogue
 #     * crater_predictor.py = load/cache/expose pipeline outputs
 # - This version still supports:
@@ -15,7 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from turtle import distance
 from typing import Any, Dict, Optional
 import json
 
