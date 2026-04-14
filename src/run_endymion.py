@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import argparse
+from ast import parse
 import importlib
 import json
 import sys
@@ -114,6 +115,7 @@ class RunConfig:
     tile_id: str = "ldem_80s_20m"
     tif_filename: str = "LDEM_80S_20MPP_ADJ.TIF"
     tif_url: Optional[str] = None
+    tif_path: Optional[str] = None  # If provided, overrides tif_url and disables downloading
     persistent_dir: str = "./persistent"
     runtime_dir: Optional[str] = None
     allow_download: bool = True
@@ -532,6 +534,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tile-id", default=RunConfig.tile_id)
     parser.add_argument("--tif-filename", default=RunConfig.tif_filename)
     parser.add_argument("--tif-url", default=RunConfig.tif_url)
+    parser.add_argument("--tif-path", default=RunConfig.tif_path)
     parser.add_argument("--base-url", default=RunConfig.base_url)
     parser.add_argument("--run-name", default=RunConfig.run_name)
 
