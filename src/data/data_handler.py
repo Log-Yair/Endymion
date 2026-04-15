@@ -290,48 +290,55 @@ class DataHandler:
         return rt_img, rt_lbl
 
     def _ensure_local_geotiff(self, spec: GeoTiffTileSpec) -> Path:
-        rt_tif = self.runtime_dir / spec.tif_filename
-        ps_tif = self.persistent_dir / spec.tif_filename
+        rt_tif = self.runtime_dir / spec.tif_filename # runtime cache path for the GeoTIFF
+        ps_tif = self.persistent_dir / spec.tif_filename # persistent cache path for the GeoTIFF
 
         if rt_tif.exists() and not self.force_download:
-            self._log(f"GeoTIFF found in runtime cache: {rt_tif}")
+            self._log(f"GeoTIFF found in runtime cache: {rt_tif}") # simple log message for cache hits
             return rt_tif
 
         if ps_tif.exists() and not self.force_download:
-            self._log(f"GeoTIFF found in persistent cache: {ps_tif}")
+            self._log(f"GeoTIFF found in persistent cache: {ps_tif}") # simple log message for persistent cache hits
             self._copy_if_needed(ps_tif, rt_tif)
             return rt_tif
 
+        # if it reaches this point, the GeoTIFF is not available locally and we need to download it (if allowed)
         if not self.allow_download:
             raise TileNotFoundError(
                 f"GeoTIFF not found locally and downloads are disabled: {spec.tile_id}"
             )
 
-        url = spec.tif_url if spec.tif_url else f"{self.base_url}/{spec.tif_filename}"
-        self._log(f"GeoTIFF not found locally. Downloading from: {url}")
-        self._download_file(url, ps_tif)
-        self._copy_if_needed(ps_tif, rt_tif)
-        self._log(f"GeoTIFF ready in runtime cache: {rt_tif}")
+        url = spec.tif_url if spec.tif_url else f"{self.base_url}/{spec.tif_filename}" # construct download URL
+        self._log(f"GeoTIFF not found locally. Downloading from: {url}") # simple log message for download attempts
+        self._download_file(url, ps_tif) # download to persistent cache first
+        self._copy_if_needed(ps_tif, rt_tif) # copy to runtime cache for processing
+        self._log(f"GeoTIFF ready in runtime cache: {rt_tif}") # simple log message for completion
         return rt_tif
 
+    # copy file if it doesn't exist in runtime cache or is different size than source (simple heuristic to avoid redundant copies)
     def _copy_if_needed(self, src: Path, dst: Path) -> None:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if (not dst.exists()) or (dst.stat().st_size != src.stat().st_size):
-            shutil.copy2(src, dst)
+        dst.parent.mkdir(parents=True, exist_ok=True) # ensure destination directory exists
+
+        # assume file is already copied if it exists with the same size
+        if dst.exists() and dst.stat().st_size == src.stat().st_size:
+            return
+
+        self._log(f"Copying file into runtime cache: {src.name}") # simple log message for copy operations
+        shutil.copy2(src, dst) 
 
     def _download_file(self, url: str, out_path: Path) -> None:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.parent.mkdir(parents=True, exist_ok=True) # ensure output directory exists
 
         if out_path.exists() and not self.force_download:
             return
 
-        tmp = out_path.with_suffix(out_path.suffix + ".part")
+        tmp = out_path.with_suffix(out_path.suffix + ".part") # temporary file path during download to avoid partial files being mistaken for complete ones
         with requests.get(url, stream=True, timeout=(15, self.timeout_s)) as r:
-            r.raise_for_status()
+            r.raise_for_status() # check for HTTP errors
             with open(tmp, "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
                     if chunk:
-                        f.write(chunk)
+                        f.write(chunk) # write in 1 MB chunks to handle large files without loading into memory (i really need this to see if it works with the 20 mpp GeoTIFFs which are ~1 GB each)
         tmp.replace(out_path)
 
     # =========================
