@@ -1,2 +1,11 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Endymion generated outputs
+persistent/
+runtime/
+
+# Local crater catalogue
 lunar_crater_database_robbins_2018.csv
 db/lunar_crater_database_robbins_2018.csv
