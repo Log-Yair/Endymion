@@ -46,7 +46,7 @@ import numpy as np
 THIS_FILE = Path(__file__).resolve() 
 SRC_DIR = THIS_FILE.parent
 REPO_ROOT = SRC_DIR.parent
-
+# repo root and src/ are both added to sys.path to allow for flexible import styles (e.g. src.data.data_handler vs data_handler) and to support the current state of the codebase where some files still use the src.* import style while others use a flat style.
 for p in (REPO_ROOT, SRC_DIR):
     p_str = str(p)
     if p_str not in sys.path:
