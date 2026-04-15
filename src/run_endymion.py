@@ -411,6 +411,7 @@ def _prepare_tif_source(cfg: RunConfig) -> tuple[str, Optional[str], bool]:
     allow_download = cfg.allow_download
 
     if cfg.tif_path is None:
+        log_step("No local GeoTIFF path provided; using cache/download resolution.")
         return tif_filename, tif_url, allow_download
 
     src = Path(cfg.tif_path)
