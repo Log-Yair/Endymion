@@ -176,19 +176,26 @@ class DataHandler:
     def get_raster_shape(self, tile_id: str) -> Tuple[int, int]:
         """
         Return full raster shape (rows, cols) for the selected tile.
-        Works for both GeoTIFF and IMG/LBL tiles.
+        This step may trigger cache lookup or download for GeoTIFF inputs.
         """
         spec = self._get_tile(tile_id)
 
         if isinstance(spec, GeoTiffTileSpec):
+            self._log(f"Resolving GeoTIFF for tile '{tile_id}'...")
             tif_path = self._ensure_local_geotiff(spec)
+            self._log(f"Opening GeoTIFF to read raster shape: {tif_path}")
             with rasterio.open(tif_path) as ds:
-                return (ds.height, ds.width)
+                shape = (ds.height, ds.width)
+            self._log(f"Raster shape resolved: {shape}")
+            return shape
 
         if isinstance(spec, LOLATileSpec):
+            self._log(f"Resolving IMG/LBL tile '{tile_id}'...")
             img_path, lbl_path = self._ensure_local_lola(spec)
             lbl = self._parse_lbl(lbl_path)
-            return (lbl.lines, lbl.line_samples)
+            shape = (lbl.lines, lbl.line_samples)
+            self._log(f"Raster shape resolved: {shape}")
+            return shape
 
         raise TileNotFoundError(f"Unsupported tile spec type for tile_id={tile_id}")
 
@@ -287,9 +294,11 @@ class DataHandler:
         ps_tif = self.persistent_dir / spec.tif_filename
 
         if rt_tif.exists() and not self.force_download:
+            self._log(f"GeoTIFF found in runtime cache: {rt_tif}")
             return rt_tif
 
         if ps_tif.exists() and not self.force_download:
+            self._log(f"GeoTIFF found in persistent cache: {ps_tif}")
             self._copy_if_needed(ps_tif, rt_tif)
             return rt_tif
 
@@ -299,8 +308,10 @@ class DataHandler:
             )
 
         url = spec.tif_url if spec.tif_url else f"{self.base_url}/{spec.tif_filename}"
+        self._log(f"GeoTIFF not found locally. Downloading from: {url}")
         self._download_file(url, ps_tif)
         self._copy_if_needed(ps_tif, rt_tif)
+        self._log(f"GeoTIFF ready in runtime cache: {rt_tif}")
         return rt_tif
 
     def _copy_if_needed(self, src: Path, dst: Path) -> None:
