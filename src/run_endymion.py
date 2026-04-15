@@ -383,11 +383,16 @@ def _run_pathfinding(
         "result": result,
     }
 
+# simple helper to print log messafes with a consistent prefix and flush=True to ensure they appear in real-time even if stdout is buffered.
+def log_step(message: str) -> None:
+    print(f"[Endymion] {message}", flush=True)
 
 # -----------------------------------------------------------------------------
 # Main pipeline
 # -----------------------------------------------------------------------------
 def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
+    log_step("Initialising DataHandler...")
+
     tile_spec = GeoTiffTileSpec(
         tile_id=cfg.tile_id,
         tif_filename=cfg.tif_filename,
@@ -404,7 +409,11 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         timeout_s=cfg.timeout_s,
     )
 
+    log_step("Resolving ROI...")
     roi = _resolve_roi(dh, cfg)
+    log_step(f"Using ROI: {roi}")
+
+    log_step("Loading or building derived terrain rasters...")
     derived = _load_or_build_derived(dh, cfg, roi)
 
     dem_m = np.asarray(derived["dem_m"], dtype=np.float32)
@@ -416,6 +425,11 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         "roughness_rms": roughness_rms,
     }
 
+    if cfg.use_craters:
+        log_step("Loading or building crater products...")
+    else:
+        log_step("Skipping crater products (--no-craters enabled).")
+
     crater_out = _build_or_load_crater_outputs(
         dh=dh,
         cfg=cfg,
@@ -424,6 +438,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         features=terrain_features,
     )
 
+    log_step("Building hazard map...")
     hazard_out = _build_hazard(
         cfg=cfg,
         dem_m=dem_m,
@@ -433,6 +448,8 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     )
 
     hazard = np.asarray(hazard_out["hazard"], dtype=np.float32)
+
+    log_step("Building traversal cost grid...")
     cost = build_cost_from_hazard(
         hazard,
         alpha=cfg.alpha,
@@ -440,8 +457,11 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         block_cost=cfg.block_cost,
     )
 
+    log_step("Running pathfinder...")
     path_out = _run_pathfinding(cfg, cost=cost, hazard=hazard)
     path_rc = path_out["path_rc"]
+
+    log_step("Saving navigation outputs...")
 
     nav_meta = {
         "start_rc": list(tuple(int(x) for x in cfg.start_rc)),
