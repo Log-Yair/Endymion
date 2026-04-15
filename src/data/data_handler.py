@@ -204,8 +204,11 @@ class DataHandler:
         Resolve the final canonical ROI for a tile.
         For the GeoTIFF workflow, this is the centred south-pole reference ROI.
         """
-        height, width = self.get_raster_shape(tile_id)
-        return centered_roi(height, width, size=size)
+        self._log(f"Resolving canonical ROI for tile '{tile_id}' with size {size}...") # simple log message for ROI resolution start
+        height, width = self.get_raster_shape(tile_id) # get raster shape (may trigger cache/download)
+        roi = centered_roi(height, width, size=size) # compute centered ROI based on raster shape and requested size
+        self._log(f"Canonical ROI resolved: {roi}") # simple log message for ROI resolution result
+        return roi
 
     # =========================
     # Public API
@@ -326,20 +329,51 @@ class DataHandler:
         self._log(f"Copying file into runtime cache: {src.name}") # simple log message for copy operations
         shutil.copy2(src, dst) 
 
+    "download file with progress logging and timeout handling (using requests with streaming to handle large files and provide progress updates. truly needed for the large GeoTIFFs im working with, but also useful for the smaller LOLA files to keep the user informed.)"
     def _download_file(self, url: str, out_path: Path) -> None:
-        out_path.parent.mkdir(parents=True, exist_ok=True) # ensure output directory exists
+        out_path.parent.mkdir(parents=True, exist_ok=True)
 
         if out_path.exists() and not self.force_download:
+            self._log(f"Download skipped; file already exists: {out_path}") # simple log message for existing files when downloads are skipped
             return
 
-        tmp = out_path.with_suffix(out_path.suffix + ".part") # temporary file path during download to avoid partial files being mistaken for complete ones
+        tmp = out_path.with_suffix(out_path.suffix + ".part") # temporary file path during download to avoid leaving incomplete files if interrupted
+        self._log(f"Starting download: {out_path.name}") # simple log message for download start
+
         with requests.get(url, stream=True, timeout=(15, self.timeout_s)) as r:
-            r.raise_for_status() # check for HTTP errors
+            r.raise_for_status()
+            # use Content-Length header for progress reporting if available, otherwise just report downloaded MB without percentage
+            total_bytes = int(r.headers.get("Content-Length", "0"))
+            downloaded = 0
+            next_report_mb = 50.0 # report progress every 50 MB downloaded
+
+            if total_bytes > 0:
+                total_mb = total_bytes / (1024 * 1024) # convert to MB for logging
+                self._log(f"Remote size: {total_mb:.1f} MB") # simple log message for remote file size
+
+            # stream download to file with progress updates. this is important for large GeoTIFFs to avoid memory issues and provide user feedback during potentially long downloads.
             with open(tmp, "wb") as f:
                 for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk) # write in 1 MB chunks to handle large files without loading into memory (i really need this to see if it works with the 20 mpp GeoTIFFs which are ~1 GB each)
-        tmp.replace(out_path)
+                    if not chunk:
+                        continue
+
+                    f.write(chunk)
+                    downloaded += len(chunk)
+
+                    downloaded_mb = downloaded / (1024 * 1024)
+                    if downloaded_mb >= next_report_mb:
+                        if total_bytes > 0:
+                            pct = 100.0 * downloaded / total_bytes
+                            self._log(
+                                f"Download progress: {downloaded_mb:.1f} MB / "
+                                f"{total_bytes / (1024 * 1024):.1f} MB ({pct:.1f}%)"
+                            )
+                        else:
+                            self._log(f"Download progress: {downloaded_mb:.1f} MB")
+                        next_report_mb += 50.0
+
+        tmp.replace(out_path) # move temp file to final location atomically
+        self._log(f"Download complete: {out_path}") # simple log message for download completion
 
     # =========================
     # GeoTIFF loading
