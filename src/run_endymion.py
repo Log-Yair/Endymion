@@ -31,14 +31,15 @@
 from __future__ import annotations
 
 import argparse
-from ast import parse
 import importlib
 import json
+import shutil
 import sys
 import types
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
+from time import perf_counter
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -387,6 +388,91 @@ def _run_pathfinding(
 def log_step(message: str) -> None:
     print(f"[Endymion] {message}", flush=True)
 
+# simple helper to log important paths (e.g. derived_dir, run_dir) in a consistent format and handle None values gracefully.
+def log_path(label: str, value: str | Path | None) -> None:
+    if value is None:
+        print(f"[Endymion] {label}: None", flush=True)
+    else:
+        print(f"[Endymion] {label}: {value}", flush=True)
+
+# --------------------------------------------------------------------------
+# geotiff helper
+# -------------------------------------------------------------------------
+
+def _prepare_tif_source(cfg: RunConfig) -> tuple[str, Optional[str], bool]:
+    """
+    Resolve the GeoTIFF source for DataHandler.
+
+    Returns:
+        tif_filename, tif_url, allow_download
+    """
+    tif_filename = cfg.tif_filename
+    tif_url = cfg.tif_url
+    allow_download = cfg.allow_download
+
+    if cfg.tif_path is None:
+        return tif_filename, tif_url, allow_download
+
+    src = Path(cfg.tif_path)
+    if not src.exists():
+        raise FileNotFoundError(f"Local GeoTIFF not found: {src}")
+
+    persistent_dir = Path(cfg.persistent_dir)
+    persistent_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_tif = persistent_dir / src.name
+
+    if src.resolve() != cached_tif.resolve():
+        if (not cached_tif.exists()) or (cached_tif.stat().st_size != src.stat().st_size):
+            log_step(f"Copying local GeoTIFF into persistent cache...")
+            shutil.copy2(src, cached_tif)
+
+    log_path("Local GeoTIFF", src)
+    log_path("Cached GeoTIFF", cached_tif)
+
+    # Once a local file is supplied, downloads are not needed for this run.
+    return src.name, None, False
+
+
+#-----------------------------------------------------------------------------
+# Early crater pre - check 
+# -----------------------------------------------------------------------------
+
+def _precheck_crater_inputs(dh: DataHandler, cfg: RunConfig, roi: ROI) -> None:
+    """
+    Fail early with a clear message if crater mode is enabled but neither:
+    - cached crater products exist, nor
+    - a valid Robbins CSV path was provided.
+    """
+    if not cfg.use_craters:
+        return
+
+    derived_dir = Path(dh.derived_dir(cfg.tile_id, roi))
+    mask_path = derived_dir / f"{cfg.cache_product_name}.npy"
+    distance_path = derived_dir / f"{cfg.cache_product_name}_distance.npy"
+    density_path = derived_dir / f"{cfg.cache_product_name}_density.npy"
+    meta_path = derived_dir / f"{cfg.cache_product_name}_meta.json"
+
+    cache_exists = all(
+        p.exists() for p in (mask_path, distance_path, density_path, meta_path)
+    )
+
+    if cache_exists:
+        log_step("Crater cache found in derived directory.")
+        return
+
+    if cfg.robbins_csv_path is None:
+        raise FileNotFoundError(
+            "Crater cache was not found for this ROI, and no Robbins CSV path was provided. "
+            "Use --robbins-csv <path> or run with --no-craters."
+        )
+
+    csv_path = Path(cfg.robbins_csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Robbins CSV not found: {csv_path}")
+
+    log_path("Robbins CSV", csv_path)
+
 # -----------------------------------------------------------------------------
 # Main pipeline
 # -----------------------------------------------------------------------------
@@ -456,12 +542,16 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         hazard_block=cfg.hazard_block,
         block_cost=cfg.block_cost,
     )
-
+    
     log_step("Running pathfinder...")
     path_out = _run_pathfinding(cfg, cost=cost, hazard=hazard)
     path_rc = path_out["path_rc"]
 
     log_step("Saving navigation outputs...")
+
+    log_step("Running evaluator...")
+
+    log_step("Run complete.")
 
     nav_meta = {
         "start_rc": list(tuple(int(x) for x in cfg.start_rc)),
@@ -617,6 +707,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         tile_id=args.tile_id,
         tif_filename=args.tif_filename,
         tif_url=args.tif_url,
+        tif_path=args.tif_path,
         persistent_dir=args.persistent_dir,
         runtime_dir=args.runtime_dir,
         allow_download=allow_download,
