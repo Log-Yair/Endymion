@@ -164,6 +164,13 @@ class DataHandler:
         self.cache_dir = self.runtime_dir  # backward compatibility
 
     # =========================
+    # Logging
+    # =========================
+    def _log(self, message: str) -> None:
+        """Print simple progress messages for long-running file operations."""
+        print(f"[DataHandler] {message}", flush=True)    
+
+    # =========================
     # Tile metadata and raster shape
     # =========================
     def get_raster_shape(self, tile_id: str) -> Tuple[int, int]:
