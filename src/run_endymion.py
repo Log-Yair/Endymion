@@ -42,9 +42,15 @@ from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 
-THIS_DIR = Path(__file__).resolve().parent
-if str(THIS_DIR) not in sys.path:
-    sys.path.insert(0, str(THIS_DIR))
+# Set up module search paths so it can import from src/ even if this file is run directly without installing the package.
+THIS_FILE = Path(__file__).resolve() 
+SRC_DIR = THIS_FILE.parent
+REPO_ROOT = SRC_DIR.parent
+
+for p in (REPO_ROOT, SRC_DIR):
+    p_str = str(p)
+    if p_str not in sys.path:
+        sys.path.insert(0, p_str)
 
 import numpy as np
 
