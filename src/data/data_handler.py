@@ -1,5 +1,4 @@
-# References / notes:
-# - Extends your current Endymion data_handler.py design.
+# - Extends the current Endymion data_handler.py design.
 # - GeoTIFF support uses rasterio because crater_raster.py already expects
 #   a geospatial raster with CRS + transform.
 # - Idea based on your existing DataHandler flow plus Rasterio dataset access.
