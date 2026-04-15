@@ -477,12 +477,17 @@ def _precheck_crater_inputs(dh: DataHandler, cfg: RunConfig, roi: ROI) -> None:
 # Main pipeline
 # -----------------------------------------------------------------------------
 def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
-    log_step("Initialising DataHandler...")
+    log_step("Initialising run...")
+    log_path("Persistent dir", cfg.persistent_dir)
+    log_path("Runtime dir", cfg.runtime_dir)
 
+    tif_filename, tif_url, allow_download = _prepare_tif_source(cfg)
+
+    log_step("Initialising DataHandler...")
     tile_spec = GeoTiffTileSpec(
         tile_id=cfg.tile_id,
-        tif_filename=cfg.tif_filename,
-        tif_url=cfg.tif_url,
+        tif_filename=tif_filename,
+        tif_url=tif_url,
     )
 
     dh = DataHandler(
@@ -490,7 +495,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         tiles=[tile_spec],
         persistent_dir=cfg.persistent_dir,
         runtime_dir=cfg.runtime_dir,
-        allow_download=cfg.allow_download,
+        allow_download=allow_download,
         force_download=cfg.force_download,
         timeout_s=cfg.timeout_s,
     )
@@ -499,8 +504,12 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     roi = _resolve_roi(dh, cfg)
     log_step(f"Using ROI: {roi}")
 
+    _precheck_crater_inputs(dh, cfg, roi)
+
+    t0 = perf_counter()
     log_step("Loading or building derived terrain rasters...")
     derived = _load_or_build_derived(dh, cfg, roi)
+    log_step(f"Derived terrain ready in {perf_counter() - t0:.2f}s")
 
     dem_m = np.asarray(derived["dem_m"], dtype=np.float32)
     slope_deg = np.asarray(derived["slope_deg"], dtype=np.float32)
@@ -512,6 +521,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     }
 
     if cfg.use_craters:
+        t0 = perf_counter()
         log_step("Loading or building crater products...")
     else:
         log_step("Skipping crater products (--no-craters enabled).")
@@ -524,6 +534,10 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         features=terrain_features,
     )
 
+    if cfg.use_craters:
+        log_step(f"Crater products ready in {perf_counter() - t0:.2f}s")
+
+    t0 = perf_counter()
     log_step("Building hazard map...")
     hazard_out = _build_hazard(
         cfg=cfg,
@@ -532,9 +546,11 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         roughness_rms=roughness_rms,
         crater_out=crater_out,
     )
+    log_step(f"Hazard map ready in {perf_counter() - t0:.2f}s")
 
     hazard = np.asarray(hazard_out["hazard"], dtype=np.float32)
 
+    t0 = perf_counter()
     log_step("Building traversal cost grid...")
     cost = build_cost_from_hazard(
         hazard,
@@ -542,16 +558,13 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         hazard_block=cfg.hazard_block,
         block_cost=cfg.block_cost,
     )
-    
+    log_step(f"Cost grid ready in {perf_counter() - t0:.2f}s")
+
+    t0 = perf_counter()
     log_step("Running pathfinder...")
     path_out = _run_pathfinding(cfg, cost=cost, hazard=hazard)
     path_rc = path_out["path_rc"]
-
-    log_step("Saving navigation outputs...")
-
-    log_step("Running evaluator...")
-
-    log_step("Run complete.")
+    log_step(f"Pathfinder finished in {perf_counter() - t0:.2f}s")
 
     nav_meta = {
         "start_rc": list(tuple(int(x) for x in cfg.start_rc)),
@@ -584,6 +597,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     if crater_out is not None:
         nav_meta["crater_predictor"] = _json_safe(crater_out.get("meta", {}))
 
+    log_step("Saving navigation outputs...")
     run_dir = dh.save_navigation(
         tile_id=cfg.tile_id,
         roi=roi,
@@ -593,13 +607,18 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         run_name=cfg.run_name,
         nav_meta=nav_meta,
     )
+    log_path("Run dir", run_dir)
 
     metrics_path: Optional[Path] = None
     metrics: Optional[Dict[str, Any]] = None
     if cfg.write_metrics:
+        log_step("Running evaluator...")
         evaluator = Evaluator(run_dir, pixel_size_m=cfg.pixel_size_m)
         metrics = evaluator.evaluate()
         metrics_path = evaluator.save()
+        log_path("Metrics path", metrics_path)
+    else:
+        log_step("Skipping evaluator (--no-metrics enabled).")
 
     pipeline_summary = {
         "config": _json_safe(asdict(cfg)),
@@ -612,9 +631,12 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         "hazard_stats": _json_safe(hazard_out.get("meta", {}).get("stats", {})),
         "metrics": _json_safe(metrics) if metrics is not None else None,
     }
+
     (Path(run_dir) / "pipeline_summary.json").write_text(
         json.dumps(_json_safe(pipeline_summary), indent=2, allow_nan=False)
     )
+
+    log_step("Run complete.")
 
     return {
         "config": cfg,
