@@ -169,14 +169,14 @@ class RunConfig:
     block_cost: float = 1e6
 
     # Pathfinding
-    start_rc: Tuple[int, int] = (569, 899)
-    goal_rc: Tuple[int, int] = (122, 588)
+    start_rc: Tuple[int, int] = (269, 499)
+    goal_rc: Tuple[int, int] = (122, 558)
     connectivity: int = 8
     heuristic_weight: float = 1.2
     corridor_radii: Tuple[int, ...] = (25, 50, 80, 120, 180, 260, 400)
 
     # Output
-    run_name: str = "final_run_v1"
+    run_name: str = "final_run_v1.5"
     write_metrics: bool = True
 
 
@@ -474,6 +474,27 @@ def _precheck_crater_inputs(dh: DataHandler, cfg: RunConfig, roi: ROI) -> None:
 
     log_path("Robbins CSV", csv_path)
 
+# This check prevents confusing pathfinder failures when the user passes
+# start/goal coordinates outside the resolved ROI shape.
+
+def _validate_start_goal(cfg: RunConfig, raster_shape: tuple[int, int]) -> None:
+    """Validate that start and goal lie inside the current ROI grid."""
+    h, w = raster_shape
+
+    sr, sc = cfg.start_rc
+    gr, gc = cfg.goal_rc
+
+    if not (0 <= sr < h and 0 <= sc < w):
+        raise ValueError(
+            f"Start point {cfg.start_rc} is out of bounds for ROI shape {(h, w)}."
+        )
+
+    if not (0 <= gr < h and 0 <= gc < w):
+        raise ValueError(
+            f"Goal point {cfg.goal_rc} is out of bounds for ROI shape {(h, w)}."
+        )
+    
+
 # -----------------------------------------------------------------------------
 # Main pipeline
 # -----------------------------------------------------------------------------
@@ -515,6 +536,9 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     dem_m = np.asarray(derived["dem_m"], dtype=np.float32)
     slope_deg = np.asarray(derived["slope_deg"], dtype=np.float32)
     roughness_rms = np.asarray(derived["roughness_rms"], dtype=np.float32)
+
+    # The ROI shape is now known, so start/goal can be checked early.
+    _validate_start_goal(cfg, dem_m.shape)
 
     terrain_features = {
         "slope_deg": slope_deg,
