@@ -38,15 +38,19 @@ except ImportError:
 
 
 def log_step(message: str) -> None:
-    print(f"[Benchmark] {message}", flush=True)
+    print(f"[Benchmark] {message}", flush=True) # Ensure logs are visible in real-time even if output is buffered.
 
-
+# Simple logging helper for paths, which may be None or missing if download is disabled.
 def log_path(label: str, value: str | Path | None) -> None:
     if value is None:
         print(f"[Benchmark] {label}: None", flush=True)
     else:
         print(f"[Benchmark] {label}: {value}", flush=True)
 
+# This file implements a simple command-line benchmark runner for Endymion.
+# It supports:
+# - Running multiple benchmark cases and hazard models in one go.
+# - Configurable data handling and model parameters via command-line arguments.
 
 def _default_cases() -> List[BenchmarkCase]:
     """
@@ -288,4 +292,56 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
         runner = BenchmarkRunner(dh, cfg)
 
-        hazard_models =
+        hazard_models = _build_hazard_models(args)
+        log_step(f"Prepared {len(hazard_models)} hazard model(s).")
+
+        if args.benchmark_json is not None:
+            benchmark_json_path = Path(args.benchmark_json)
+            if not benchmark_json_path.exists():
+                raise FileNotFoundError(f"Benchmark JSON not found: {benchmark_json_path}")
+
+            log_path("Benchmark JSON", benchmark_json_path)
+            result = runner.run_benchmark_file(
+                benchmark_json_path=benchmark_json_path,
+                hazard_models=hazard_models,
+            )
+        else:
+            cases = _default_cases()
+            log_step(f"Using built-in starter cases: {len(cases)} case(s).")
+            result = runner.run(cases=cases, hazard_models=hazard_models)
+
+        benchmark_root = result["benchmark_root"]
+        summary = result["summary"]
+        model_summary = summary.get("model_summary", [])
+
+        print("=" * 72)
+        print("Endymion benchmark complete")
+        print("=" * 72)
+        print(f"Benchmark root : {benchmark_root}")
+        print(f"Cases          : {result['manifest']['num_cases']}")
+        print(f"Models         : {result['manifest']['num_models']}")
+        print("-" * 72)
+
+        for row in model_summary:
+            print(
+                f"{row['hazard_model_id']}: "
+                f"success_rate={row['success_rate']}, "
+                f"mean_hazard={row['mean_path_hazard_mean']}, "
+                f"mean_cost_per_m={row['mean_cost_per_m']}, "
+                f"mean_expansions={row['mean_expansions']}"
+            )
+
+        print("-" * 72)
+        print(f"manifest.json  : {Path(benchmark_root) / 'manifest.json'}")
+        print(f"summary.json   : {Path(benchmark_root) / 'summary.json'}")
+        print(f"summary.csv    : {Path(benchmark_root) / 'summary.csv'}")
+
+        return 0
+
+    except Exception as exc:
+        print(f"[run_benchmarks] ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
