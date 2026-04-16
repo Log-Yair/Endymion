@@ -254,3 +254,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     return parser
 
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        log_step("Initialising DataHandler...")
+        dh = _build_data_handler(args)
+
+        if args.no_canonical_roi:
+            if args.roi is None:
+                raise ValueError("Provide --roi R0 R1 C0 C1 when --no-canonical-roi is used.")
+            roi = tuple(int(x) for x in args.roi)
+        else:
+            log_step("Resolving canonical ROI...")
+            roi = dh.canonical_roi(args.tile_id, size=args.roi_size)
+
+        log_step(f"Using ROI: {roi}")
+
+        cfg = BenchmarkConfig(
+            tile_id=args.tile_id,
+            roi=roi,
+            benchmark_id=args.benchmark_id,
+            pixel_size_m=args.pixel_size_m,
+            alpha=args.alpha,
+            hazard_block=args.hazard_block,
+            block_cost=args.block_cost,
+            connectivity=args.connectivity,
+            heuristic_weight=args.heuristic_weight,
+            corridor_radii=tuple(args.corridor_radii),
+        )
+
+        runner = BenchmarkRunner(dh, cfg)
+
+        hazard_models =
