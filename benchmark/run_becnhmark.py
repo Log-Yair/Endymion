@@ -78,3 +78,29 @@ def _default_cases() -> List[BenchmarkCase]:
         ),
     ]
 
+
+def _build_hazard_models(args: argparse.Namespace) -> List[HazardModelSpec]:
+    """
+    Build the benchmark model registry.
+
+    The first benchmark pass stays small on purpose:
+    - terrain_only
+    - terrain_plus_crater
+
+    ML can be added later without changing the benchmark runner structure.
+    """
+    models: List[HazardModelSpec] = [
+        HazardModelSpec(
+            model_id=args.terrain_model_id,
+            kind="terrain_only",
+            params={
+                "slope_deg_max": args.slope_deg_max,
+                "roughness_rms_max": args.roughness_rms_max,
+                "w_slope": args.w_slope,
+                "w_roughness": args.w_roughness,
+                "use_impassable_mask": True,
+                "impassable_slope_deg": args.impassable_slope_deg,
+            },
+        )
+    ]
+
