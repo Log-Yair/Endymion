@@ -153,3 +153,104 @@ def _build_hazard_models(args: argparse.Namespace) -> List[HazardModelSpec]:
     return models
 
 
+def _build_data_handler(args: argparse.Namespace) -> DataHandler:
+    """
+    Build the minimal DataHandler needed by BenchmarkRunner.
+
+    Benchmarking assumes the derived ROI cache already exists.
+    That means:
+    - terrain rasters must already be saved
+    - crater cache must already be saved if crater models are used
+    """
+    tile_spec = GeoTiffTileSpec(
+        tile_id=args.tile_id,
+        tif_filename=args.tif_filename,
+        tif_url=args.tif_url,
+    )
+
+    return DataHandler(
+        base_url=args.base_url,
+        tiles=[tile_spec],
+        persistent_dir=args.persistent_dir,
+        runtime_dir=args.runtime_dir,
+        allow_download=not args.disable_download,
+        force_download=args.force_download,
+        timeout_s=args.timeout_s,
+    )
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run Endymion benchmark comparisons over multiple cases and hazard models.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # Data / cache
+    parser.add_argument("--persistent-dir", default="C:\\Endymion\\persistent")
+    parser.add_argument("--runtime-dir", default="C:\\Endymion\\runtime")
+    parser.add_argument("--base-url", default="https://pgda.gsfc.nasa.gov/data/LOLA_20mpp")
+    parser.add_argument("--tile-id", default="ldem_80s_20m")
+    parser.add_argument("--tif-filename", default="LDEM_80S_20MPP_ADJ.TIF")
+    parser.add_argument("--tif-url", default=None)
+    parser.add_argument("--timeout-s", type=int, default=120)
+    parser.add_argument("--disable-download", action="store_true")
+    parser.add_argument("--force-download", action="store_true")
+
+    # ROI
+    parser.add_argument("--roi-size", type=int, default=1024)
+    parser.add_argument("--no-canonical-roi", action="store_true")
+    parser.add_argument("--roi", nargs=4, type=int, metavar=("R0", "R1", "C0", "C1"))
+
+    # Benchmark identity / fixed settings
+    parser.add_argument("--benchmark-id", default="benchmark_phase2_cli")
+    parser.add_argument("--pixel-size-m", type=float, default=20.0)
+    parser.add_argument("--alpha", type=float, default=10.0)
+    parser.add_argument("--hazard-block", type=float, default=0.95)
+    parser.add_argument("--block-cost", type=float, default=1e6)
+    parser.add_argument("--connectivity", type=int, default=8)
+    parser.add_argument("--heuristic-weight", type=float, default=2.0)
+    parser.add_argument(
+        "--corridor-radii",
+        nargs="+",
+        type=int,
+        default=[25, 50, 80, 120, 180, 260, 400],
+        metavar="R",
+    )
+
+    # Benchmark cases
+    parser.add_argument(
+        "--benchmark-json",
+        default=None,
+        help="Optional benchmark spec JSON file. If omitted, built-in starter cases are used.",
+    )
+
+    # Terrain model parameters
+    parser.add_argument("--terrain-model-id", default="terrain_only_v1")
+    parser.add_argument("--slope-deg-max", type=float, default=34.55)
+    parser.add_argument("--roughness-rms-max", type=float, default=18.56)
+    parser.add_argument("--w-slope", type=float, default=0.7)
+    parser.add_argument("--w-roughness", type=float, default=0.3)
+    parser.add_argument("--impassable-slope-deg", type=float, default=40.0)
+
+    # Crater model parameters
+    parser.add_argument("--no-crater-model", action="store_true")
+    parser.add_argument("--crater-model-id", default="terrain_crater_v1")
+    parser.add_argument("--cache-product-name", default="crater_mask")
+    parser.add_argument("--max-distance-m", type=float, default=1000.0)
+    parser.add_argument("--w-crater-density", type=float, default=0.5)
+    parser.add_argument("--w-crater-proximity", type=float, default=0.5)
+    parser.add_argument("--w-terrain", type=float, default=0.8)
+    parser.add_argument("--w-crater", type=float, default=0.2)
+
+    # Optional ML model parameters
+    parser.add_argument("--include-ml-model", action="store_true")
+    parser.add_argument("--ml-model-id", default="terrain_crater_ml_v1")
+    parser.add_argument("--ml-product-name", default="crater_proba_ml_v1")
+    parser.add_argument("--w-crater-density-ml", type=float, default=0.3)
+    parser.add_argument("--w-crater-proximity-ml", type=float, default=0.3)
+    parser.add_argument("--w-crater-ml", type=float, default=0.4)
+    parser.add_argument("--w-terrain-ml", type=float, default=0.85)
+    parser.add_argument("--w-crater-ml-outer", type=float, default=0.15)
+
+    return parser
+
