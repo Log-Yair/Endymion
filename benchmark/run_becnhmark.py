@@ -104,3 +104,52 @@ def _build_hazard_models(args: argparse.Namespace) -> List[HazardModelSpec]:
         )
     ]
 
+    if not args.no_crater_model:
+        models.append(
+            HazardModelSpec(
+                model_id=args.crater_model_id,
+                kind="terrain_plus_crater",
+                params={
+                    "cache_product_name": args.cache_product_name,
+                    "slope_deg_max": args.slope_deg_max,
+                    "roughness_rms_max": args.roughness_rms_max,
+                    "w_slope": args.w_slope,
+                    "w_roughness": args.w_roughness,
+                    "use_impassable_mask": True,
+                    "impassable_slope_deg": args.impassable_slope_deg,
+                    "max_distance_m": args.max_distance_m,
+                    "w_crater_density": args.w_crater_density,
+                    "w_crater_proximity": args.w_crater_proximity,
+                    "w_terrain": args.w_terrain,
+                    "w_crater": args.w_crater,
+                },
+            )
+        )
+
+    if args.include_ml_model:
+        models.append(
+            HazardModelSpec(
+                model_id=args.ml_model_id,
+                kind="terrain_plus_crater_ml",
+                params={
+                    "cache_product_name": args.cache_product_name,
+                    "ml_product_name": args.ml_product_name,
+                    "slope_deg_max": args.slope_deg_max,
+                    "roughness_rms_max": args.roughness_rms_max,
+                    "w_slope": args.w_slope,
+                    "w_roughness": args.w_roughness,
+                    "use_impassable_mask": True,
+                    "impassable_slope_deg": args.impassable_slope_deg,
+                    "max_distance_m": args.max_distance_m,
+                    "w_crater_density": args.w_crater_density_ml,
+                    "w_crater_proximity": args.w_crater_proximity_ml,
+                    "w_crater_ml": args.w_crater_ml,
+                    "w_terrain": args.w_terrain_ml,
+                    "w_crater": args.w_crater_ml_outer,
+                },
+            )
+        )
+
+    return models
+
+
