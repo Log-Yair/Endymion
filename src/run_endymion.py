@@ -474,24 +474,29 @@ def _precheck_crater_inputs(dh: DataHandler, cfg: RunConfig, roi: ROI) -> None:
 
     log_path("Robbins CSV", csv_path)
 
+
+# Small note:
 # This check prevents confusing pathfinder failures when the user passes
 # start/goal coordinates outside the resolved ROI shape.
+# This message is intentionally explicit because users may confuse ROI-local coordinates with full-raster coordinates.
 
-def _validate_start_goal(cfg: RunConfig, raster_shape: tuple[int, int]) -> None:
-    """Validate that start and goal lie inside the current ROI grid."""
+def _validate_start_goal(cfg: RunConfig, raster_shape: tuple[int, int], roi: ROI) -> None:
     h, w = raster_shape
-
     sr, sc = cfg.start_rc
     gr, gc = cfg.goal_rc
 
     if not (0 <= sr < h and 0 <= sc < w):
         raise ValueError(
-            f"Start point {cfg.start_rc} is out of bounds for ROI shape {(h, w)}."
+            f"Start point {cfg.start_rc} is out of bounds for ROI shape {raster_shape}. "
+            f"Valid row range: 0 to {h - 1}; valid col range: 0 to {w - 1}. "
+            f"The resolved ROI is {roi}. Coordinates must be ROI-local, not full-raster pixel coordinates."
         )
 
     if not (0 <= gr < h and 0 <= gc < w):
         raise ValueError(
-            f"Goal point {cfg.goal_rc} is out of bounds for ROI shape {(h, w)}."
+            f"Goal point {cfg.goal_rc} is out of bounds for ROI shape {raster_shape}. "
+            f"Valid row range: 0 to {h - 1}; valid col range: 0 to {w - 1}. "
+            f"The resolved ROI is {roi}. Coordinates must be ROI-local, not full-raster pixel coordinates."
         )
     
 
@@ -538,7 +543,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     roughness_rms = np.asarray(derived["roughness_rms"], dtype=np.float32)
 
     # The ROI shape is now known, so start/goal can be checked early.
-    _validate_start_goal(cfg, dem_m.shape)
+    _validate_start_goal(cfg, dem_m.shape, roi)
 
     terrain_features = {
         "slope_deg": slope_deg,
