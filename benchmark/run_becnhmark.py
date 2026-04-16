@@ -48,3 +48,33 @@ def log_path(label: str, value: str | Path | None) -> None:
         print(f"[Benchmark] {label}: {value}", flush=True)
 
 
+def _default_cases() -> List[BenchmarkCase]:
+    """
+    Small starter benchmark set.
+    These are ROI-local coordinates, not full-raster coordinates.
+    The user can later replace these with a JSON benchmark file or custom cases.
+    """
+    return [
+        BenchmarkCase(
+            case_id="easy_01",
+            start_rc=(269, 499),
+            goal_rc=(122, 558),
+            tier="easy",
+            notes="Short validated case used during runner testing.",
+        ),
+        BenchmarkCase(
+            case_id="medium_01",
+            start_rc=(569, 899),
+            goal_rc=(122, 588),
+            tier="medium",
+            notes="Higher-risk start region; previously validated in the notebook flow.",
+        ),
+        BenchmarkCase(
+            case_id="hard_01",
+            start_rc=(850, 250),
+            goal_rc=(180, 760),
+            tier="hard",
+            notes="Longer cross-ROI traversal for early benchmark comparison.",
+        ),
+    ]
+
