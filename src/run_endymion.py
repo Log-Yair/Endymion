@@ -5,10 +5,12 @@
 #   * DataHandler.save_derived(...) writes dem_m.npy / slope_deg.npy / roughness_rms.npy
 #   * DataHandler.save_navigation(...) writes hazard.npy / cost.npy / path_rc.npy / nav_meta.json
 #   * Evaluator then reads those artifacts and writes metrics.json
+
 # - Design goal for this file:
 #   keep one clean, official, reproducible pipeline runner separate from the benchmark runner
 #   and separate from the presentation notebook.
-# - Main ideas reused from the current project files and notes:
+
+# - Main ideas reused from the project files and notes:
 #   * canonical ROI via DataHandler.canonical_roi(...)
 #   * GeoTIFF-first DEM workflow
 #   * crater catalogue cache/build path via CraterPredictor(catalogue_raster_v1)
@@ -16,6 +18,10 @@
 #   * corridor-aware Weighted A* via Pathfinder.find_path_corridor(...)
 #   * post-run evaluation via Evaluator(...)
 #
+# - It supports both local GeoTIFF use and cache/download resolution.
+# - It protects previous runs by auto-versioning repeated run names.
+# - It validates ROI-local start/goal coordinates before pathfinding starts.
+
 # Visual flow:
 #
 #   DEM / GeoTIFF
@@ -27,6 +33,17 @@
 #       -> Pathfinder
 #       -> DataHandler.save_navigation
 #       -> Evaluator.save
+#      -> pipeline_summary.json (with config, metrics, and important paths)
+#
+#   CLI arguments allow overriding all important config options, with sensible defaults for a canonical run.
+#
+#   The output directory structure is designed to be clean and navigable, with one run per subdirectory under the derived directory for the tile/ROI. Each run contains all relevant outputs and metadata, and a summary JSON for easy parsing.
+
+
+# import statements are grouped into three sections:
+# 1. Standard library imports   
+# 2. Third-party imports
+# 3. Local application imports (with a fallback strategy for flat src aliases)
 
 from __future__ import annotations
 
@@ -43,22 +60,25 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
-# Set up module search paths so it can import from src/ even if this file is run directly without installing the package.
-THIS_FILE = Path(__file__).resolve() 
+# This path setup allows the file to run both as:
+# - python -m src.run_endymion
+# - python src/run_endymion.py
+THIS_FILE = Path(__file__).resolve()
 SRC_DIR = THIS_FILE.parent
 REPO_ROOT = SRC_DIR.parent
-# repo root and src/ are both added to sys.path to allow for flexible import styles (e.g. src.data.data_handler vs data_handler) and to support the current state of the codebase where some files still use the src.* import style while others use a flat style.
+
 for p in (REPO_ROOT, SRC_DIR):
     p_str = str(p)
     if p_str not in sys.path:
         sys.path.insert(0, p_str)
 
-import numpy as np
 
 # -----------------------------------------------------------------------------
 # Import strategy
 # -----------------------------------------------------------------------------
-# Falls back to a flat-file layout by installing lightweight module aliases so files like crater_predictor.py that still import src.data.crater_raster can keep working during local cleanup/testing.
+# The fallback below exists for cases where the package layout is slightly messy
+# during cleanup. Normal use should still prefer:
+#   python -m src.run_endymion
 def _install_flat_src_aliases() -> None:
     src_pkg = sys.modules.setdefault("src", types.ModuleType("src"))
 
@@ -71,18 +91,19 @@ def _install_flat_src_aliases() -> None:
         setattr(src_pkg, pkg_name, pkg)
 
     alias_map = {
-        "src.data.data_handler": "data_handler",
-        "src.data.crater_raster": "crater_raster",
-        "src.features.feature_extractor": "feature_extractor",
-        "src.models.crater_predictor": "crater_predictor",
-        "src.models.hazard_assessor": "hazard_assessor",
-        "src.planning.pathfinder": "pathfinder",
-        "src.evaluation.evaluator": "evaluator",
+        "src.data.data_handler": "data.data_handler",
+        "src.data.crater_raster": "data.crater_raster",
+        "src.features.feature_extractor": "features.feature_extractor",
+        "src.models.crater_predictor": "models.crater_predictor",
+        "src.models.hazard_assessor": "models.hazard_assessor",
+        "src.planning.pathfinder": "planning.pathfinder",
+        "src.evaluation.evaluator": "evaluation.evaluator",
     }
 
     for alias, flat_name in alias_map.items():
         if alias in sys.modules:
             continue
+
         module = importlib.import_module(flat_name)
         sys.modules[alias] = module
 
@@ -107,6 +128,7 @@ except ImportError:
     from src.planning.pathfinder import Pathfinder, build_cost_from_hazard
     from src.evaluation.evaluator import Evaluator
 
+
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
@@ -122,7 +144,7 @@ class RunConfig:
     tile_id: str = "ldem_80s_20m"
     tif_filename: str = "LDEM_80S_20MPP_ADJ.TIF"
     tif_url: Optional[str] = None
-    tif_path: Optional[str] = None  # If provided, overrides tif_url and disables downloading
+    tif_path: Optional[str] = None  # If provided, a local GeoTIFF is used.
     persistent_dir: str = "./persistent"
     runtime_dir: Optional[str] = None
     allow_download: bool = True
@@ -169,8 +191,8 @@ class RunConfig:
     block_cost: float = 1e6
 
     # Pathfinding
-    start_rc: Tuple[int, int] = (269, 499)
-    goal_rc: Tuple[int, int] = (122, 558)
+    start_rc: RC = (269, 499)
+    goal_rc: RC = (122, 558)
     connectivity: int = 8
     heuristic_weight: float = 1.2
     corridor_radii: Tuple[int, ...] = (25, 50, 80, 120, 180, 260, 400)
@@ -181,40 +203,186 @@ class RunConfig:
 
 
 # -----------------------------------------------------------------------------
-# Helpers
+# Logging helpers
+# -----------------------------------------------------------------------------
+def log_step(message: str) -> None:
+    """Print a short progress message and flush it immediately."""
+    print(f"[Endymion] {message}", flush=True)
+
+
+def log_path(label: str, value: str | Path | None) -> None:
+    """Print important paths in a consistent format."""
+    if value is None:
+        print(f"[Endymion] {label}: None", flush=True)
+    else:
+        print(f"[Endymion] {label}: {value}", flush=True)
+
+
+# -----------------------------------------------------------------------------
+# General helpers
 # -----------------------------------------------------------------------------
 def _json_safe(value: Any) -> Any:
-    """Convert numpy/path objects into JSON-safe Python types."""
+    """Convert values into JSON-safe Python types."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
+
     if isinstance(value, Path):
         return str(value)
+
     if isinstance(value, np.ndarray):
         return {
             "type": "ndarray",
             "shape": list(value.shape),
             "dtype": str(value.dtype),
         }
-    if isinstance(value, (np.integer,)):
+
+    if isinstance(value, np.integer):
         return int(value)
-    if isinstance(value, (np.floating,)):
+
+    if isinstance(value, np.floating):
         return float(value) if np.isfinite(value) else None
+
     if isinstance(value, dict):
         return {str(k): _json_safe(v) for k, v in value.items()}
+
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
+
     return str(value)
 
 
 def _resolve_roi(dh: DataHandler, cfg: RunConfig) -> ROI:
+    """Resolve the ROI for the current run."""
     if cfg.use_canonical_roi:
         return dh.canonical_roi(cfg.tile_id, size=cfg.roi_size_px)
+
     if cfg.roi is None:
         raise ValueError("Provide roi when use_canonical_roi=False.")
+
     return tuple(int(x) for x in cfg.roi)  # type: ignore[return-value]
 
 
+def _prepare_tif_source(cfg: RunConfig) -> tuple[str, Optional[str], bool]:
+    """
+    Resolve the GeoTIFF source for DataHandler.
+
+    Returns:
+        tif_filename, tif_url, allow_download
+    """
+    tif_filename = cfg.tif_filename
+    tif_url = cfg.tif_url
+    allow_download = cfg.allow_download
+
+    if cfg.tif_path is None:
+        log_step("No local GeoTIFF path provided; using cache/download resolution.")
+        return tif_filename, tif_url, allow_download
+
+    src = Path(cfg.tif_path)
+    if not src.exists():
+        raise FileNotFoundError(f"Local GeoTIFF not found: {src}")
+
+    persistent_dir = Path(cfg.persistent_dir)
+    persistent_dir.mkdir(parents=True, exist_ok=True)
+
+    cached_tif = persistent_dir / src.name
+
+    if src.resolve() != cached_tif.resolve():
+        if (not cached_tif.exists()) or (cached_tif.stat().st_size != src.stat().st_size):
+            log_step("Copying local GeoTIFF into persistent cache...")
+            shutil.copy2(src, cached_tif)
+
+    log_path("Local GeoTIFF", src)
+    log_path("Cached GeoTIFF", cached_tif)
+
+    # When a local file is provided, downloading is no longer needed.
+    return src.name, None, False
+
+
+def _precheck_crater_inputs(dh: DataHandler, cfg: RunConfig, roi: ROI) -> None:
+    """
+    Fail early with a clear message if crater mode is enabled but neither:
+    - cached crater products exist, nor
+    - a valid Robbins CSV path was provided.
+    """
+    if not cfg.use_craters:
+        return
+
+    derived_dir = Path(dh.derived_dir(cfg.tile_id, roi))
+    mask_path = derived_dir / f"{cfg.cache_product_name}.npy"
+    distance_path = derived_dir / f"{cfg.cache_product_name}_distance.npy"
+    density_path = derived_dir / f"{cfg.cache_product_name}_density.npy"
+    meta_path = derived_dir / f"{cfg.cache_product_name}_meta.json"
+
+    cache_exists = all(
+        p.exists() for p in (mask_path, distance_path, density_path, meta_path)
+    )
+
+    if cache_exists:
+        log_step("Crater cache found in derived directory.")
+        return
+
+    if cfg.robbins_csv_path is None:
+        raise FileNotFoundError(
+            "Crater cache was not found for this ROI, and no Robbins CSV path was provided. "
+            "Use --robbins-csv <path> or run with --no-craters."
+        )
+
+    csv_path = Path(cfg.robbins_csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Robbins CSV not found: {csv_path}")
+
+    log_path("Robbins CSV", csv_path)
+
+
+def _validate_start_goal(cfg: RunConfig, raster_shape: tuple[int, int], roi: ROI) -> None:
+    """
+    Validate that start and goal lie inside the current ROI grid.
+
+    The message is intentionally explicit because users may confuse
+    ROI-local coordinates with full-raster coordinates.
+    """
+    h, w = raster_shape
+    sr, sc = cfg.start_rc
+    gr, gc = cfg.goal_rc
+
+    if not (0 <= sr < h and 0 <= sc < w):
+        raise ValueError(
+            f"Start point {cfg.start_rc} is out of bounds for ROI shape {raster_shape}. "
+            f"Valid row range: 0 to {h - 1}; valid col range: 0 to {w - 1}. "
+            f"The resolved ROI is {roi}. Coordinates must be ROI-local, not full-raster pixel coordinates."
+        )
+
+    if not (0 <= gr < h and 0 <= gc < w):
+        raise ValueError(
+            f"Goal point {cfg.goal_rc} is out of bounds for ROI shape {raster_shape}. "
+            f"Valid row range: 0 to {h - 1}; valid col range: 0 to {w - 1}. "
+            f"The resolved ROI is {roi}. Coordinates must be ROI-local, not full-raster pixel coordinates."
+        )
+
+
+def _resolve_run_name(dh: DataHandler, tile_id: str, roi: ROI, run_name: str) -> str:
+    """
+    Return a safe run name that does not overwrite an existing run directory.
+    If the requested name already exists, _v2, _v3, ... is appended.
+    """
+    base_dir = dh.derived_dir(tile_id, roi) / "navigation"
+    candidate = run_name
+    run_dir = base_dir / candidate
+
+    if not run_dir.exists():
+        return candidate
+
+    version = 2
+    while True:
+        candidate = f"{run_name}_v{version}"
+        run_dir = base_dir / candidate
+        if not run_dir.exists():
+            return candidate
+        version += 1
+
+
 def _load_or_build_derived(dh: DataHandler, cfg: RunConfig, roi: ROI) -> Dict[str, Any]:
+    """Load terrain-derived rasters from cache or build them from the DEM."""
     if cfg.reuse_cached_derived:
         cached = dh.load_derived(cfg.tile_id, roi)
         if cached is not None:
@@ -231,6 +399,7 @@ def _load_or_build_derived(dh: DataHandler, cfg: RunConfig, roi: ROI) -> Dict[st
         expected_shape=dem_m.shape,
         strict_shape=False,
     )
+
     features = feature_extractor.extract(
         dem_m,
         roughness_method=cfg.roughness_method,
@@ -254,9 +423,7 @@ def _load_or_build_derived(dh: DataHandler, cfg: RunConfig, roi: ROI) -> Dict[st
     )
 
     return {
-        "meta": {
-            "derived_dir": str(out_dir),
-        },
+        "meta": {"derived_dir": str(out_dir)},
         "dem_m": dem_m,
         **features,
     }
@@ -269,6 +436,7 @@ def _build_or_load_crater_outputs(
     dem_m: np.ndarray,
     features: Dict[str, np.ndarray],
 ) -> Optional[Dict[str, np.ndarray]]:
+    """Load crater products from cache or build them from the catalogue."""
     if not cfg.use_craters:
         return None
 
@@ -302,6 +470,7 @@ def _build_hazard(
     roughness_rms: np.ndarray,
     crater_out: Optional[Dict[str, np.ndarray]],
 ) -> Dict[str, Any]:
+    """Build the unified hazard map."""
     assessor = HazardAssessor(
         slope_deg_max=cfg.slope_deg_max,
         roughness_rms_max=cfg.roughness_rms_max,
@@ -334,11 +503,8 @@ def _build_hazard(
     )
 
 
-def _run_pathfinding(
-    cfg: RunConfig,
-    cost: np.ndarray,
-    hazard: np.ndarray,
-) -> Dict[str, Any]:
+def _run_pathfinding(cfg: RunConfig, cost: np.ndarray, hazard: np.ndarray) -> Dict[str, Any]:
+    """Run corridor-aware pathfinding over the cost grid."""
     pathfinder = Pathfinder(
         connectivity=cfg.connectivity,
         block_cost=cfg.block_cost,
@@ -384,121 +550,6 @@ def _run_pathfinding(
         "result": result,
     }
 
-# simple helper to print log messafes with a consistent prefix and flush=True to ensure they appear in real-time even if stdout is buffered.
-def log_step(message: str) -> None:
-    print(f"[Endymion] {message}", flush=True)
-
-# simple helper to log important paths (e.g. derived_dir, run_dir) in a consistent format and handle None values gracefully.
-def log_path(label: str, value: str | Path | None) -> None:
-    if value is None:
-        print(f"[Endymion] {label}: None", flush=True)
-    else:
-        print(f"[Endymion] {label}: {value}", flush=True)
-
-# --------------------------------------------------------------------------
-# geotiff helper
-# -------------------------------------------------------------------------
-
-def _prepare_tif_source(cfg: RunConfig) -> tuple[str, Optional[str], bool]:
-    """
-    Resolve the GeoTIFF source for DataHandler.
-
-    Returns:
-        tif_filename, tif_url, allow_download
-    """
-    tif_filename = cfg.tif_filename
-    tif_url = cfg.tif_url
-    allow_download = cfg.allow_download
-
-    if cfg.tif_path is None:
-        log_step("No local GeoTIFF path provided; using cache/download resolution.")
-        return tif_filename, tif_url, allow_download
-
-    src = Path(cfg.tif_path)
-    if not src.exists():
-        raise FileNotFoundError(f"Local GeoTIFF not found: {src}")
-
-    persistent_dir = Path(cfg.persistent_dir)
-    persistent_dir.mkdir(parents=True, exist_ok=True)
-
-    cached_tif = persistent_dir / src.name
-
-    if src.resolve() != cached_tif.resolve():
-        if (not cached_tif.exists()) or (cached_tif.stat().st_size != src.stat().st_size):
-            log_step(f"Copying local GeoTIFF into persistent cache...")
-            shutil.copy2(src, cached_tif)
-
-    log_path("Local GeoTIFF", src)
-    log_path("Cached GeoTIFF", cached_tif)
-
-    # Once a local file is supplied, downloads are not needed for this run.
-    return src.name, None, False
-
-
-#-----------------------------------------------------------------------------
-# Early crater pre - check 
-# -----------------------------------------------------------------------------
-
-def _precheck_crater_inputs(dh: DataHandler, cfg: RunConfig, roi: ROI) -> None:
-    """
-    Fail early with a clear message if crater mode is enabled but neither:
-    - cached crater products exist, nor
-    - a valid Robbins CSV path was provided.
-    """
-    if not cfg.use_craters:
-        return
-
-    derived_dir = Path(dh.derived_dir(cfg.tile_id, roi))
-    mask_path = derived_dir / f"{cfg.cache_product_name}.npy"
-    distance_path = derived_dir / f"{cfg.cache_product_name}_distance.npy"
-    density_path = derived_dir / f"{cfg.cache_product_name}_density.npy"
-    meta_path = derived_dir / f"{cfg.cache_product_name}_meta.json"
-
-    cache_exists = all(
-        p.exists() for p in (mask_path, distance_path, density_path, meta_path)
-    )
-
-    if cache_exists:
-        log_step("Crater cache found in derived directory.")
-        return
-
-    if cfg.robbins_csv_path is None:
-        raise FileNotFoundError(
-            "Crater cache was not found for this ROI, and no Robbins CSV path was provided. "
-            "Use --robbins-csv <path> or run with --no-craters."
-        )
-
-    csv_path = Path(cfg.robbins_csv_path)
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Robbins CSV not found: {csv_path}")
-
-    log_path("Robbins CSV", csv_path)
-
-
-# Small note:
-# This check prevents confusing pathfinder failures when the user passes
-# start/goal coordinates outside the resolved ROI shape.
-# This message is intentionally explicit because users may confuse ROI-local coordinates with full-raster coordinates.
-
-def _validate_start_goal(cfg: RunConfig, raster_shape: tuple[int, int], roi: ROI) -> None:
-    h, w = raster_shape
-    sr, sc = cfg.start_rc
-    gr, gc = cfg.goal_rc
-
-    if not (0 <= sr < h and 0 <= sc < w):
-        raise ValueError(
-            f"Start point {cfg.start_rc} is out of bounds for ROI shape {raster_shape}. "
-            f"Valid row range: 0 to {h - 1}; valid col range: 0 to {w - 1}. "
-            f"The resolved ROI is {roi}. Coordinates must be ROI-local, not full-raster pixel coordinates."
-        )
-
-    if not (0 <= gr < h and 0 <= gc < w):
-        raise ValueError(
-            f"Goal point {cfg.goal_rc} is out of bounds for ROI shape {raster_shape}. "
-            f"Valid row range: 0 to {h - 1}; valid col range: 0 to {w - 1}. "
-            f"The resolved ROI is {roi}. Coordinates must be ROI-local, not full-raster pixel coordinates."
-        )
-    
 
 # -----------------------------------------------------------------------------
 # Main pipeline
@@ -531,6 +582,10 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     roi = _resolve_roi(dh, cfg)
     log_step(f"Using ROI: {roi}")
 
+    safe_run_name = _resolve_run_name(dh, cfg.tile_id, roi, cfg.run_name)
+    if safe_run_name != cfg.run_name:
+        log_step(f"Run name '{cfg.run_name}' already exists; using '{safe_run_name}' instead.")
+
     _precheck_crater_inputs(dh, cfg, roi)
 
     t0 = perf_counter()
@@ -542,7 +597,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
     slope_deg = np.asarray(derived["slope_deg"], dtype=np.float32)
     roughness_rms = np.asarray(derived["roughness_rms"], dtype=np.float32)
 
-    # The ROI shape is now known, so start/goal can be checked early.
+    # The ROI shape is known now, so the path coordinates can be checked early.
     _validate_start_goal(cfg, dem_m.shape, roi)
 
     terrain_features = {
@@ -620,7 +675,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
             "pixel_size_m": cfg.pixel_size_m,
             "use_craters": cfg.use_craters,
             "crater_model_id": cfg.crater_model_id if cfg.use_craters else None,
-            "run_name": cfg.run_name,
+            "run_name": safe_run_name,
         },
     }
 
@@ -634,7 +689,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         hazard=hazard,
         cost=cost,
         path_rc=path_rc,
-        run_name=cfg.run_name,
+        run_name=safe_run_name,
         nav_meta=nav_meta,
     )
     log_path("Run dir", run_dir)
@@ -660,6 +715,7 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
         "result": _json_safe(path_out["result"]),
         "hazard_stats": _json_safe(hazard_out.get("meta", {}).get("stats", {})),
         "metrics": _json_safe(metrics) if metrics is not None else None,
+        "run_name": safe_run_name,
     }
 
     (Path(run_dir) / "pipeline_summary.json").write_text(
@@ -683,19 +739,14 @@ def run_endymion(cfg: RunConfig) -> Dict[str, Any]:
 
 
 # -----------------------------------------------------------------------------
-# CLI (command-line interface)
+# CLI
 # -----------------------------------------------------------------------------
-def _parse_rc(values: Sequence[str]) -> RC:
-    if len(values) != 2:
-        raise argparse.ArgumentTypeError("Expected exactly two integers: row col")
-    return int(values[0]), int(values[1])
-
-# Note: argparse doesn't support mutually exclusive groups of boolean flags well, so we use pairs of flags and handle the logic in config_from_args.
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run one official Endymion pipeline execution.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+
     # Data source / storage
     parser.add_argument("--persistent-dir", default=RunConfig.persistent_dir)
     parser.add_argument("--runtime-dir", default=RunConfig.runtime_dir)
@@ -712,11 +763,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--roi", nargs=4, type=int, metavar=("R0", "R1", "C0", "C1"))
 
     # Feature extraction
-    parser.add_argument("--reuse-cached-derived", action="store_true", default=True)
     parser.add_argument("--rebuild-derived", action="store_true")
 
     # Crater products
-    parser.add_argument("--use-craters", action="store_true", default=True)
     parser.add_argument("--no-craters", action="store_true")
     parser.add_argument("--robbins-csv", dest="robbins_csv_path", default=None)
     parser.add_argument("--rebuild-crater-if-missing", action="store_true")
@@ -731,7 +780,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=list(RunConfig.corridor_radii),
         metavar="R",
     )
-    # Note: heuristic_weight is a bit of an odd duck since it's not strictly necessary for running the pipeline, but it can have a big impact on pathfinding results and is worth exposing as a CLI arg for experimentation/tuning.
     parser.add_argument("--heuristic-weight", type=float, default=RunConfig.heuristic_weight)
 
     # Cost model
@@ -739,18 +787,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hazard-block", type=float, default=RunConfig.hazard_block)
     parser.add_argument("--block-cost", type=float, default=RunConfig.block_cost)
 
-    # Download options
-    parser.add_argument("--allow-download", action="store_true", default=True)
+    # Download / output options
     parser.add_argument("--disable-download", action="store_true")
     parser.add_argument("--force-download", action="store_true")
     parser.add_argument("--no-metrics", action="store_true")
 
     return parser
 
-# Note: we handle mutually exclusive boolean flags (e.g. --use-craters vs --no-craters) here in the config_from_args function since argparse doesn't support this pattern well.
+
 def config_from_args(args: argparse.Namespace) -> RunConfig:
-    use_craters = args.use_craters and not args.no_craters
-    allow_download = args.allow_download and not args.disable_download
+    """Convert CLI arguments into a RunConfig object."""
+    use_craters = not args.no_craters
+    allow_download = not args.disable_download
 
     roi = tuple(args.roi) if args.roi is not None else None
 
@@ -782,8 +830,9 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         write_metrics=not args.no_metrics,
     )
 
-# Note: this is a simple helper to print a human-readable summary of the run results after completion. The full details are in the pipeline_summary.json file saved in the run directory.
+
 def _print_run_report(out: Dict[str, Any]) -> None:
+    """Print a short terminal summary after the run completes."""
     summary = out["pipeline_summary"]
     result = summary.get("result", {})
     metrics = summary.get("metrics") or {}
@@ -794,6 +843,7 @@ def _print_run_report(out: Dict[str, Any]) -> None:
     print(f"Run dir      : {summary['run_dir']}")
     print(f"Derived dir  : {summary['derived_dir']}")
     print(f"ROI          : {tuple(summary['roi'])}")
+    print(f"Run name     : {summary.get('run_name')}")
     print(f"Success      : {result.get('success')}")
     print(f"Failure      : {result.get('failure_reason')}")
     print(f"Total cost   : {result.get('total_cost')}")
@@ -811,8 +861,9 @@ def _print_run_report(out: Dict[str, Any]) -> None:
         print(f"Cost / m     : {eff.get('cost_per_m')}")
         print(f"Metrics path : {summary.get('metrics_path')}")
 
-# Note: main() is the official entry point for running the Endymion pipeline from the command line. It parses arguments, builds the config, runs the pipeline, and prints a summary report. The full details of the run are saved in the run directory as JSON files and NumPy arrays for reproducibility and further analysis.
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Command-line entry point."""
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     cfg = config_from_args(args)
@@ -822,9 +873,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         _print_run_report(out)
         return 0
     except Exception as exc:
-        print(f"[run_endymion] ERROR: {exc}", file=sys.stderr)
+        print(f"[run_endymion] ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
-# This allows the script to be run directly from the command line with `python run_endymion.py` and also makes it easy to call main() from other Python code or tests if needed.
+
 if __name__ == "__main__":
     raise SystemExit(main())
