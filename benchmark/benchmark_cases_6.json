@@ -1,0 +1,89 @@
+{
+  "tile_id": "ldem_80s_20m",
+  "roi": [
+    14688,
+    15712,
+    14688,
+    15712
+  ],
+  "tiers": {
+    "easy": [
+      {
+        "id": "easy_01",
+        "start_rc": [
+          269,
+          499
+        ],
+        "goal_rc": [
+          122,
+          558
+        ],
+        "notes": "Short validated case."
+      },
+      {
+        "id": "easy_02",
+        "start_rc": [
+          220,
+          420
+        ],
+        "goal_rc": [
+          300,
+          700
+        ],
+        "notes": "Additional short route."
+      }
+    ],
+    "medium": [
+      {
+        "id": "medium_01",
+        "start_rc": [
+          569,
+          899
+        ],
+        "goal_rc": [
+          122,
+          588
+        ],
+        "notes": "Higher-risk start region."
+      },
+      {
+        "id": "medium_02",
+        "start_rc": [
+          480,
+          220
+        ],
+        "goal_rc": [
+          210,
+          640
+        ],
+        "notes": "Moderate cross-ROI route."
+      }
+    ],
+    "hard": [
+      {
+        "id": "hard_01",
+        "start_rc": [
+          850,
+          250
+        ],
+        "goal_rc": [
+          180,
+          760
+        ],
+        "notes": "Longer cross-ROI traversal."
+      },
+      {
+        "id": "hard_02",
+        "start_rc": [
+          780,
+          180
+        ],
+        "goal_rc": [
+          140,
+          820
+        ],
+        "notes": "Stress-test route."
+      }
+    ]
+  }
+}
